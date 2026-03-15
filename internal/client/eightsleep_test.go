@@ -1,6 +1,8 @@
 package client
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -162,6 +164,40 @@ func TestAuthTokenEndpoint_FallsBackToLegacy(t *testing.T) {
 	}
 	if c.token != "legacy-tok" {
 		t.Errorf("token = %q, want legacy-tok", c.token)
+	}
+}
+
+func TestGzipResponseDecoded(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"user":{"userId":"uid-gz","currentDevice":{"id":"dev-gz"}}}`))
+	})
+	mux.HandleFunc("/users/uid-gz/temperature", func(w http.ResponseWriter, r *http.Request) {
+		// Respond with gzip-encoded body
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		gz.Write([]byte(`{"currentLevel":42,"currentState":{"type":"on"}}`))
+		gz.Close()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Write(buf.Bytes())
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New("e", "p", "", "", "")
+	c.BaseURL = srv.URL
+	c.token = "t"
+	c.tokenExp = time.Now().Add(time.Hour)
+	c.HTTP = srv.Client()
+
+	st, err := c.GetStatus(context.Background())
+	if err != nil {
+		t.Fatalf("GetStatus with gzip response: %v", err)
+	}
+	if st.CurrentLevel != 42 {
+		t.Errorf("CurrentLevel = %d, want 42", st.CurrentLevel)
 	}
 }
 
