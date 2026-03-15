@@ -23,8 +23,11 @@ const (
 	defaultClientSecret = "f0954a3ed5763ba3d06834c73731a32f15f168f47d4f164751275def86db0c76"
 )
 
-// authURL is a var so tests can point it at a local server.
-var authURL = "https://auth-api.8slp.net/v1/tokens"
+// authURL and appAPIBaseURL are vars so tests can point them at local servers.
+var (
+	authURL       = "https://auth-api.8slp.net/v1/tokens"
+	appAPIBaseURL = "https://app-api.8slp.net/v1"
+)
 
 // Client represents Eight Sleep API client.
 type Client struct {
@@ -198,11 +201,23 @@ func (c *Client) requireUser(ctx context.Context) error {
 
 const maxRetries = 3
 
+// do builds a URL from BaseURL + path and delegates to doURL.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, out any) error {
-	return c.doRetry(ctx, method, path, query, body, out, 0)
+	u := c.BaseURL + path
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	return c.doURL(ctx, method, u, body, out)
 }
 
-func (c *Client) doRetry(ctx context.Context, method, path string, query url.Values, body any, out any, attempt int) error {
+// doURL sends an authenticated request to an absolute URL. Use do() for
+// BaseURL-relative paths; use doURL directly for requests to other hosts
+// (e.g. the app API for away mode).
+func (c *Client) doURL(ctx context.Context, method, u string, body any, out any) error {
+	return c.doURLRetry(ctx, method, u, body, out, 0)
+}
+
+func (c *Client) doURLRetry(ctx context.Context, method, u string, body any, out any, attempt int) error {
 	if err := c.ensureToken(ctx); err != nil {
 		return err
 	}
@@ -213,10 +228,6 @@ func (c *Client) doRetry(ctx context.Context, method, path string, query url.Val
 			return err
 		}
 		rdr = bytes.NewReader(b)
-	}
-	u := c.BaseURL + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, rdr)
 	if err != nil {
@@ -238,25 +249,25 @@ func (c *Client) doRetry(ctx context.Context, method, path string, query url.Val
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
 		if attempt >= maxRetries {
-			return fmt.Errorf("rate limited after %d retries: %s %s", maxRetries, method, path)
+			return fmt.Errorf("rate limited after %d retries: %s %s", maxRetries, method, u)
 		}
 		time.Sleep(time.Duration(2*(attempt+1)) * time.Second)
-		return c.doRetry(ctx, method, path, query, body, out, attempt+1)
+		return c.doURLRetry(ctx, method, u, body, out, attempt+1)
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		if attempt >= maxRetries {
-			return fmt.Errorf("unauthorized after %d retries: %s %s", maxRetries, method, path)
+			return fmt.Errorf("unauthorized after %d retries: %s %s", maxRetries, method, u)
 		}
 		c.token = ""
 		_ = tokencache.Clear(c.Identity())
 		if err := c.ensureToken(ctx); err != nil {
 			return err
 		}
-		return c.doRetry(ctx, method, path, query, body, out, attempt+1)
+		return c.doURLRetry(ctx, method, u, body, out, attempt+1)
 	}
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("api %s %s: %s", method, path, string(b))
+		return fmt.Errorf("api %s %s: %s", method, u, string(b))
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
@@ -302,6 +313,28 @@ func (c *Client) SetTemperature(ctx context.Context, level int) error {
 	path := fmt.Sprintf("/users/%s/temperature", c.UserID)
 	body := map[string]int{"currentLevel": level}
 	return c.do(ctx, http.MethodPut, path, nil, body, nil)
+}
+
+// SetAwayMode activates or deactivates away mode for a specific user ID.
+// The away-mode endpoint lives on the app API (app-api.8slp.net), not the
+// client API used by most other endpoints.
+// If userID is empty, it defaults to the authenticated user.
+func (c *Client) SetAwayMode(ctx context.Context, userID string, away bool) error {
+	if userID == "" {
+		if err := c.requireUser(ctx); err != nil {
+			return err
+		}
+		userID = c.UserID
+	}
+	ts := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02T15:04:05.000Z")
+	var payload map[string]any
+	if away {
+		payload = map[string]any{"awayPeriod": map[string]string{"start": ts}}
+	} else {
+		payload = map[string]any{"awayPeriod": map[string]string{"end": ts}}
+	}
+	u := fmt.Sprintf("%s/users/%s/away-mode", appAPIBaseURL, userID)
+	return c.doURL(ctx, http.MethodPut, u, payload, nil)
 }
 
 // TempStatus represents current temperature state payload.

@@ -204,6 +204,99 @@ func Test429Retry(t *testing.T) {
 	}
 }
 
+func TestSetAwayMode(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"user":{"userId":"uid-123","currentDevice":{"id":"dev-1"}}}`))
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	old := appAPIBaseURL
+	appAPIBaseURL = srv.URL
+	defer func() { appAPIBaseURL = old }()
+
+	c := New("e", "p", "uid-123", "", "")
+	c.BaseURL = srv.URL
+	c.token = "t"
+	c.tokenExp = time.Now().Add(time.Hour)
+	c.HTTP = srv.Client()
+
+	// Test activate
+	if err := c.SetAwayMode(context.Background(), "", true); err != nil {
+		t.Fatalf("SetAwayMode on: %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q, want PUT", gotMethod)
+	}
+	if gotPath != "/users/uid-123/away-mode" {
+		t.Errorf("path = %q, want /users/uid-123/away-mode", gotPath)
+	}
+	period, ok := gotBody["awayPeriod"].(map[string]any)
+	if !ok {
+		t.Fatal("missing awayPeriod in body")
+	}
+	if _, ok := period["start"]; !ok {
+		t.Error("activate should send awayPeriod.start")
+	}
+
+	// Test deactivate
+	if err := c.SetAwayMode(context.Background(), "uid-456", false); err != nil {
+		t.Fatalf("SetAwayMode off: %v", err)
+	}
+	if gotPath != "/users/uid-456/away-mode" {
+		t.Errorf("path = %q, want /users/uid-456/away-mode", gotPath)
+	}
+	period, ok = gotBody["awayPeriod"].(map[string]any)
+	if !ok {
+		t.Fatal("missing awayPeriod in body")
+	}
+	if _, ok := period["end"]; !ok {
+		t.Error("deactivate should send awayPeriod.end")
+	}
+}
+
+func TestDeviceSides(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"user":{"userId":"uid-123","currentDevice":{"id":"dev-1"}}}`))
+	})
+	mux.HandleFunc("/devices/dev-1", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"result":{"leftUserId":"uid-left","rightUserId":"uid-right"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New("e", "p", "", "", "")
+	c.BaseURL = srv.URL
+	c.token = "t"
+	c.tokenExp = time.Now().Add(time.Hour)
+	c.HTTP = srv.Client()
+
+	sides, err := c.Device().Sides(context.Background())
+	if err != nil {
+		t.Fatalf("Sides: %v", err)
+	}
+	if sides.LeftUserID != "uid-left" {
+		t.Errorf("LeftUserID = %q, want uid-left", sides.LeftUserID)
+	}
+	if sides.RightUserID != "uid-right" {
+		t.Errorf("RightUserID = %q, want uid-right", sides.RightUserID)
+	}
+}
+
 func Test429RetryCapped(t *testing.T) {
 	// Verify retries are bounded: after maxRetries, return an error.
 	count := 0
