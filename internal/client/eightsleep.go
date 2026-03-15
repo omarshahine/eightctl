@@ -18,11 +18,13 @@ import (
 
 const (
 	defaultBaseURL = "https://client-api.8slp.net/v1"
-	authURL        = "https://auth-api.8slp.net/v1/tokens"
 	// Extracted from the official Eight Sleep Android app v7.39.17 (public client creds)
 	defaultClientID     = "0894c7f33bb94800a03f1f4df13a4f38"
 	defaultClientSecret = "f0954a3ed5763ba3d06834c73731a32f15f168f47d4f164751275def86db0c76"
 )
+
+// authURL is a var so tests can point it at a local server.
+var authURL = "https://auth-api.8slp.net/v1/tokens"
 
 // Client represents Eight Sleep API client.
 type Client struct {
@@ -116,19 +118,19 @@ func (c *Client) EnsureDeviceID(ctx context.Context) (string, error) {
 }
 
 func (c *Client) authTokenEndpoint(ctx context.Context) error {
-	payload := map[string]string{
-		"grant_type":    "password",
-		"username":      c.Email,
-		"password":      c.Password,
-		"client_id":     "sleep-client",
-		"client_secret": "",
+	form := url.Values{
+		"grant_type":    {"password"},
+		"username":      {c.Email},
+		"password":      {c.Password},
+		"client_id":     {c.ClientID},
+		"client_secret": {c.ClientSecret},
 	}
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authURL,
+		bytes.NewReader([]byte(form.Encode())))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

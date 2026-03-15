@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -67,6 +69,99 @@ func TestRequireUserFilledAutomatically(t *testing.T) {
 	}
 	if st.CurrentLevel != 5 || st.CurrentState.Type != "on" {
 		t.Fatalf("unexpected status %+v", st)
+	}
+}
+
+func TestAuthTokenEndpoint_FormEncoded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Must be form-encoded, not JSON.
+		ct := r.Header.Get("Content-Type")
+		if ct != "application/x-www-form-urlencoded" {
+			t.Errorf("expected form-urlencoded, got %s", ct)
+			http.Error(w, "bad content type", http.StatusBadRequest)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		// Verify correct client credentials are sent (not "sleep-client").
+		if got := r.PostFormValue("client_id"); got != defaultClientID {
+			t.Errorf("client_id = %q, want %q", got, defaultClientID)
+		}
+		if got := r.PostFormValue("client_secret"); got != defaultClientSecret {
+			t.Errorf("client_secret = %q, want %q", got, defaultClientSecret)
+		}
+		if got := r.PostFormValue("grant_type"); got != "password" {
+			t.Errorf("grant_type = %q, want password", got)
+		}
+		if got := r.PostFormValue("username"); got != "test@example.com" {
+			t.Errorf("username = %q, want test@example.com", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token": "tok-123",
+			"expires_in":   3600,
+			"userId":       "uid-abc",
+		})
+	}))
+	defer srv.Close()
+
+	old := authURL
+	authURL = srv.URL
+	defer func() { authURL = old }()
+
+	c := New("test@example.com", "secret", "", "", "")
+	c.HTTP = srv.Client()
+
+	if err := c.Authenticate(context.Background()); err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if c.token != "tok-123" {
+		t.Errorf("token = %q, want tok-123", c.token)
+	}
+	if c.UserID != "uid-abc" {
+		t.Errorf("UserID = %q, want uid-abc", c.UserID)
+	}
+}
+
+func TestAuthTokenEndpoint_FallsBackToLegacy(t *testing.T) {
+	tokenCalled := false
+	legacyCalled := false
+
+	mux := http.NewServeMux()
+	// Token endpoint fails
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		tokenCalled = true
+		http.Error(w, "nope", http.StatusBadRequest)
+	})
+	// Legacy login succeeds
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		legacyCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"session":{"token":"legacy-tok","userId":"uid-legacy","expirationDate":"2099-01-01T00:00:00Z"}}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	old := authURL
+	authURL = srv.URL + "/token"
+	defer func() { authURL = old }()
+
+	c := New("test@example.com", "secret", "", "", "")
+	c.BaseURL = srv.URL
+	c.HTTP = srv.Client()
+
+	if err := c.Authenticate(context.Background()); err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if !tokenCalled {
+		t.Error("token endpoint was not tried")
+	}
+	if !legacyCalled {
+		t.Error("legacy login was not tried after token failure")
+	}
+	if c.token != "legacy-tok" {
+		t.Errorf("token = %q, want legacy-tok", c.token)
 	}
 }
 
