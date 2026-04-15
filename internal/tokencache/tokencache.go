@@ -43,21 +43,14 @@ func SetOpenKeyringForTest(fn func() (keyring.Keyring, error)) (restore func()) 
 
 func defaultOpenKeyring() (keyring.Keyring, error) {
 	home, _ := os.UserHomeDir()
-	backends := []keyring.BackendType{
-		keyring.KeychainBackend,
-		keyring.SecretServiceBackend,
-		keyring.WinCredBackend,
-		keyring.FileBackend,
-	}
-	// In headless environments (SSH, no terminal, launchd agents) the macOS
-	// Keychain backend hangs indefinitely waiting for an authorization prompt.
-	// Fall back to file-only storage in those cases.
-	if os.Getenv("SSH_TTY") != "" || os.Getenv("TERM") == "" || os.Getenv("EIGHTCTL_KEYRING_FILE") == "1" {
-		backends = []keyring.BackendType{keyring.FileBackend}
-	}
 	return keyring.Open(keyring.Config{
-		ServiceName:      serviceName,
-		AllowedBackends:  backends,
+		ServiceName: serviceName,
+		AllowedBackends: []keyring.BackendType{
+			keyring.KeychainBackend,
+			keyring.SecretServiceBackend,
+			keyring.WinCredBackend,
+			keyring.FileBackend,
+		},
 		FileDir:          filepath.Join(home, ".config", "eightctl", "keyring"),
 		FilePasswordFunc: filePassword,
 	})

@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -124,44 +123,21 @@ func TestAuthTokenEndpoint_FormEncoded(t *testing.T) {
 	}
 }
 
-func TestAuthTokenEndpoint_FallsBackToLegacy(t *testing.T) {
-	tokenCalled := false
-	legacyCalled := false
-
-	mux := http.NewServeMux()
-	// Token endpoint fails
-	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		tokenCalled = true
+func TestAuthTokenEndpoint_ReturnsErrorOnFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusBadRequest)
-	})
-	// Legacy login succeeds
-	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		legacyCalled = true
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"session":{"token":"legacy-tok","userId":"uid-legacy","expirationDate":"2099-01-01T00:00:00Z"}}`)
-	})
-	srv := httptest.NewServer(mux)
+	}))
 	defer srv.Close()
 
 	old := authURL
-	authURL = srv.URL + "/token"
+	authURL = srv.URL
 	defer func() { authURL = old }()
 
 	c := New("test@example.com", "secret", "", "", "")
-	c.BaseURL = srv.URL
 	c.HTTP = srv.Client()
 
-	if err := c.Authenticate(context.Background()); err != nil {
-		t.Fatalf("Authenticate: %v", err)
-	}
-	if !tokenCalled {
-		t.Error("token endpoint was not tried")
-	}
-	if !legacyCalled {
-		t.Error("legacy login was not tried after token failure")
-	}
-	if c.token != "legacy-tok" {
-		t.Errorf("token = %q, want legacy-tok", c.token)
+	if err := c.Authenticate(context.Background()); err == nil {
+		t.Fatal("Authenticate: expected error, got nil")
 	}
 }
 
