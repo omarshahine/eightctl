@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -185,7 +184,6 @@ func (c *Client) authLegacyLogin(ctx context.Context) error {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("User-Agent", "okhttp/4.9.3")
-	req.Header.Set("Accept-Encoding", "gzip")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return err
@@ -259,7 +257,13 @@ func (c *Client) requireUser(ctx context.Context) error {
 	return c.EnsureUserID(ctx)
 }
 
+const maxRetries = 3
+
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, out any) error {
+	return c.doRetry(ctx, method, path, query, body, out, 0)
+}
+
+func (c *Client) doRetry(ctx context.Context, method, path string, query url.Values, body any, out any, attempt int) error {
 	if err := c.ensureToken(ctx); err != nil {
 		return err
 	}
@@ -284,7 +288,9 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("User-Agent", "okhttp/4.9.3")
-	req.Header.Set("Accept-Encoding", "gzip")
+	// Note: we intentionally do NOT set Accept-Encoding. Go's http.Transport
+	// handles gzip transparently when the header is absent. Setting it
+	// explicitly disables automatic decompression.
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -292,32 +298,29 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		time.Sleep(2 * time.Second)
-		return c.do(ctx, method, path, query, body, out)
+		if attempt >= maxRetries {
+			return fmt.Errorf("rate limited after %d retries: %s %s", maxRetries, method, path)
+		}
+		time.Sleep(time.Duration(2*(attempt+1)) * time.Second)
+		return c.doRetry(ctx, method, path, query, body, out, attempt+1)
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
+		if attempt >= maxRetries {
+			return fmt.Errorf("unauthorized after %d retries: %s %s", maxRetries, method, path)
+		}
 		c.token = ""
 		_ = tokencache.Clear(c.Identity())
 		if err := c.ensureToken(ctx); err != nil {
 			return err
 		}
-		return c.do(ctx, method, path, query, body, out)
+		return c.doRetry(ctx, method, path, query, body, out, attempt+1)
 	}
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("api %s %s: %s", method, path, string(b))
 	}
 	if out != nil {
-		r := io.Reader(resp.Body)
-		if resp.Header.Get("Content-Encoding") == "gzip" {
-			gz, err := gzip.NewReader(resp.Body)
-			if err != nil {
-				return fmt.Errorf("gzip decode: %w", err)
-			}
-			defer gz.Close()
-			r = gz
-		}
-		return json.NewDecoder(r).Decode(out)
+		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return nil
 }
