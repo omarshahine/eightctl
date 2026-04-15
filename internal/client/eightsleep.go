@@ -115,13 +115,12 @@ func (c *Client) EnsureDeviceID(ctx context.Context) (string, error) {
 }
 
 func (c *Client) authTokenEndpoint(ctx context.Context) error {
-	form := url.Values{
-		"grant_type":    {"password"},
-		"username":      {c.Email},
-		"password":      {c.Password},
-		"client_id":     {c.ClientID},
-		"client_secret": {c.ClientSecret},
-	}
+	form := url.Values{}
+	form.Set("grant_type", "password")
+	form.Set("username", c.Email)
+	form.Set("password", c.Password)
+	form.Set("client_id", c.ClientID)
+	form.Set("client_secret", c.ClientSecret)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authURL,
 		bytes.NewReader([]byte(form.Encode())))
 	if err != nil {

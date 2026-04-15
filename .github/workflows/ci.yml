@@ -27,22 +27,22 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-
 
-      - name: Install tools
-        run: |
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.60.1
-          go install mvdan.cc/gofumpt@v0.6.0
+      - name: Install gofumpt
+        run: go install mvdan.cc/gofumpt@v0.7.0
 
       - name: Format check (gofumpt)
         run: |
-          # list files that would change
           CHANGED=$(gofumpt -l .)
           if [ -n "$CHANGED" ]; then
-            echo "gofumpt would reformat:\n$CHANGED" >&2
+            echo "gofumpt would reformat:" >&2
+            echo "$CHANGED" >&2
             exit 1
           fi
 
       - name: Lint
-        run: golangci-lint run ./...
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1
 
       - name: Test
         run: go test ./...
