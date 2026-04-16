@@ -30,16 +30,16 @@ var travelCreateTripCmd = &cobra.Command{Use: "create-trip", RunE: func(cmd *cob
 		return err
 	}
 	body := map[string]any{}
-	if v := viper.GetString("destination"); v != "" {
+	if v, _ := cmd.Flags().GetString("destination"); v != "" {
 		body["destination"] = v
 	}
-	if v := viper.GetString("start-date"); v != "" {
+	if v, _ := cmd.Flags().GetString("start-date"); v != "" {
 		body["startDate"] = v
 	}
-	if v := viper.GetString("end-date"); v != "" {
+	if v, _ := cmd.Flags().GetString("end-date"); v != "" {
 		body["endDate"] = v
 	}
-	if v := viper.GetString("timezone"); v != "" {
+	if v, _ := cmd.Flags().GetString("trip-timezone"); v != "" {
 		body["timezone"] = v
 	}
 	if len(body) == 0 {
@@ -53,7 +53,7 @@ var travelDeleteTripCmd = &cobra.Command{Use: "delete-trip", RunE: func(cmd *cob
 	if err := requireAuthFields(); err != nil {
 		return err
 	}
-	id := viper.GetString("trip")
+	id, _ := cmd.Flags().GetString("trip")
 	if id == "" {
 		return fmt.Errorf("--trip required")
 	}
@@ -65,7 +65,7 @@ var travelPlansCmd = &cobra.Command{Use: "plans", RunE: func(cmd *cobra.Command,
 	if err := requireAuthFields(); err != nil {
 		return err
 	}
-	trip := viper.GetString("trip")
+	trip, _ := cmd.Flags().GetString("trip")
 	cl := client.New(viper.GetString("email"), viper.GetString("password"), viper.GetString("user_id"), viper.GetString("client_id"), viper.GetString("client_secret"))
 	res, err := cl.Travel().Plans(context.Background(), trip)
 	if err != nil {
@@ -78,15 +78,15 @@ var travelCreatePlanCmd = &cobra.Command{Use: "create-plan", RunE: func(cmd *cob
 	if err := requireAuthFields(); err != nil {
 		return err
 	}
-	trip := viper.GetString("trip")
+	trip, _ := cmd.Flags().GetString("trip")
 	if trip == "" {
 		return fmt.Errorf("--trip required")
 	}
 	body := map[string]any{}
-	if v := viper.GetString("name"); v != "" {
+	if v, _ := cmd.Flags().GetString("name"); v != "" {
 		body["name"] = v
 	}
-	if v := viper.GetString("date"); v != "" {
+	if v, _ := cmd.Flags().GetString("date"); v != "" {
 		body["date"] = v
 	}
 	cl := client.New(viper.GetString("email"), viper.GetString("password"), viper.GetString("user_id"), viper.GetString("client_id"), viper.GetString("client_secret"))
@@ -97,15 +97,15 @@ var travelUpdatePlanCmd = &cobra.Command{Use: "update-plan", RunE: func(cmd *cob
 	if err := requireAuthFields(); err != nil {
 		return err
 	}
-	plan := viper.GetString("plan")
+	plan, _ := cmd.Flags().GetString("plan")
 	if plan == "" {
 		return fmt.Errorf("--plan required")
 	}
 	patch := map[string]any{}
-	if v := viper.GetString("name"); v != "" {
+	if v, _ := cmd.Flags().GetString("name"); v != "" {
 		patch["name"] = v
 	}
-	if v := viper.GetString("date"); v != "" {
+	if v, _ := cmd.Flags().GetString("date"); v != "" {
 		patch["date"] = v
 	}
 	if len(patch) == 0 {
@@ -119,7 +119,7 @@ var travelTasksCmd = &cobra.Command{Use: "tasks", RunE: func(cmd *cobra.Command,
 	if err := requireAuthFields(); err != nil {
 		return err
 	}
-	plan := viper.GetString("plan")
+	plan, _ := cmd.Flags().GetString("plan")
 	cl := client.New(viper.GetString("email"), viper.GetString("password"), viper.GetString("user_id"), viper.GetString("client_id"), viper.GetString("client_secret"))
 	res, err := cl.Travel().PlanTasks(context.Background(), plan)
 	if err != nil {
@@ -132,7 +132,7 @@ var travelAirportCmd = &cobra.Command{Use: "airport-search", RunE: func(cmd *cob
 	if err := requireAuthFields(); err != nil {
 		return err
 	}
-	query := viper.GetString("query")
+	query, _ := cmd.Flags().GetString("query")
 	cl := client.New(viper.GetString("email"), viper.GetString("password"), viper.GetString("user_id"), viper.GetString("client_id"), viper.GetString("client_secret"))
 	res, err := cl.Travel().AirportSearch(context.Background(), query)
 	if err != nil {
@@ -145,7 +145,7 @@ var travelFlightCmd = &cobra.Command{Use: "flight-status", RunE: func(cmd *cobra
 	if err := requireAuthFields(); err != nil {
 		return err
 	}
-	flight := viper.GetString("flight")
+	flight, _ := cmd.Flags().GetString("flight")
 	cl := client.New(viper.GetString("email"), viper.GetString("password"), viper.GetString("user_id"), viper.GetString("client_id"), viper.GetString("client_secret"))
 	res, err := cl.Travel().FlightStatus(context.Background(), flight)
 	if err != nil {
@@ -162,7 +162,9 @@ func init() {
 	travelCreateTripCmd.Flags().String("destination", "", "destination")
 	travelCreateTripCmd.Flags().String("start-date", "", "start date")
 	travelCreateTripCmd.Flags().String("end-date", "", "end date")
-	travelCreateTripCmd.Flags().String("timezone", "", "timezone")
+	// Named --trip-timezone (not --timezone) so the CLI's persistent --timezone
+	// flag for output/formatting is not shadowed on this subcommand.
+	travelCreateTripCmd.Flags().String("trip-timezone", "", "IANA timezone for the trip destination")
 	travelDeleteTripCmd.Flags().String("trip", "", "trip id")
 	travelCreatePlanCmd.Flags().String("trip", "", "trip id")
 	travelCreatePlanCmd.Flags().String("name", "", "plan name")
@@ -170,22 +172,6 @@ func init() {
 	travelUpdatePlanCmd.Flags().String("plan", "", "plan id")
 	travelUpdatePlanCmd.Flags().String("name", "", "plan name")
 	travelUpdatePlanCmd.Flags().String("date", "", "plan date")
-
-	viper.BindPFlag("trip", travelPlansCmd.Flags().Lookup("trip"))
-	viper.BindPFlag("plan", travelTasksCmd.Flags().Lookup("plan"))
-	viper.BindPFlag("query", travelAirportCmd.Flags().Lookup("query"))
-	viper.BindPFlag("flight", travelFlightCmd.Flags().Lookup("flight"))
-	viper.BindPFlag("destination", travelCreateTripCmd.Flags().Lookup("destination"))
-	viper.BindPFlag("start-date", travelCreateTripCmd.Flags().Lookup("start-date"))
-	viper.BindPFlag("end-date", travelCreateTripCmd.Flags().Lookup("end-date"))
-	viper.BindPFlag("timezone", travelCreateTripCmd.Flags().Lookup("timezone"))
-	viper.BindPFlag("trip", travelDeleteTripCmd.Flags().Lookup("trip"))
-	viper.BindPFlag("trip", travelCreatePlanCmd.Flags().Lookup("trip"))
-	viper.BindPFlag("name", travelCreatePlanCmd.Flags().Lookup("name"))
-	viper.BindPFlag("date", travelCreatePlanCmd.Flags().Lookup("date"))
-	viper.BindPFlag("plan", travelUpdatePlanCmd.Flags().Lookup("plan"))
-	viper.BindPFlag("name", travelUpdatePlanCmd.Flags().Lookup("name"))
-	viper.BindPFlag("date", travelUpdatePlanCmd.Flags().Lookup("date"))
 
 	travelCmd.AddCommand(
 		travelTripsCmd,
