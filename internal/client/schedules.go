@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 // TemperatureSchedule represents server-side temperature schedules.
@@ -19,14 +20,24 @@ func (c *Client) ListSchedules(ctx context.Context) ([]TemperatureSchedule, erro
 	if err := c.requireUser(ctx); err != nil {
 		return nil, err
 	}
+	q := url.Values{}
+	q.Set("specialization", "all")
 	path := fmt.Sprintf("/users/%s/temperature/schedules", c.UserID)
 	var res struct {
 		Schedules []TemperatureSchedule `json:"schedules"`
 	}
-	if err := c.do(ctx, http.MethodGet, path, nil, nil, &res); err != nil {
+	if err := c.do(ctx, http.MethodGet, path, q, nil, &res); err == nil {
+		return res.Schedules, nil
+	}
+	// Fallback: some accounts reject /temperature/schedules; try household endpoint.
+	hpath := fmt.Sprintf("/household/users/%s/schedule", c.UserID)
+	var hres struct {
+		Schedules []TemperatureSchedule `json:"schedules"`
+	}
+	if err := c.do(ctx, http.MethodGet, hpath, nil, nil, &hres); err != nil {
 		return nil, err
 	}
-	return res.Schedules, nil
+	return hres.Schedules, nil
 }
 
 func (c *Client) CreateSchedule(ctx context.Context, s TemperatureSchedule) (*TemperatureSchedule, error) {

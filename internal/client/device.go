@@ -61,8 +61,22 @@ func (d *DeviceActions) Owner(ctx context.Context) (any, error) {
 	}
 	path := fmt.Sprintf("/devices/%s/owner", id)
 	var res any
-	err = d.c.do(ctx, http.MethodGet, path, nil, nil, &res)
-	return res, err
+	if err := d.c.do(ctx, http.MethodGet, path, nil, nil, &res); err == nil {
+		return res, nil
+	}
+	// Fallback: extract ownerId from device info when /owner endpoint is unavailable.
+	info, err := d.Info(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if m, ok := info.(map[string]any); ok {
+		if result, ok := m["result"].(map[string]any); ok {
+			if ownerID, ok := result["ownerId"].(string); ok {
+				return map[string]any{"ownerId": ownerID}, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("owner not found in device info")
 }
 
 func (d *DeviceActions) Warranty(ctx context.Context) (any, error) {
