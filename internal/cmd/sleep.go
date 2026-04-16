@@ -24,7 +24,7 @@ var sleepDayCmd = &cobra.Command{
 		if err := requireAuthFields(); err != nil {
 			return err
 		}
-		date := viper.GetString("date")
+		date, _ := cmd.Flags().GetString("date")
 		if date == "" {
 			date = time.Now().Format("2006-01-02")
 		}
@@ -53,6 +53,5 @@ var sleepDayCmd = &cobra.Command{
 
 func init() {
 	sleepCmd.PersistentFlags().String("date", "", "date YYYY-MM-DD (default today)")
-	viper.BindPFlag("date", sleepCmd.PersistentFlags().Lookup("date"))
 	sleepCmd.AddCommand(sleepDayCmd)
 }
