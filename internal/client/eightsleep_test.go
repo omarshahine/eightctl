@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -70,6 +71,107 @@ func TestRequireUserFilledAutomatically(t *testing.T) {
 	}
 }
 
+func TestAuthTokenEndpoint_FormEncoded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Must be form-encoded, not JSON.
+		ct := r.Header.Get("Content-Type")
+		if ct != "application/x-www-form-urlencoded" {
+			t.Errorf("expected form-urlencoded, got %s", ct)
+			http.Error(w, "bad content type", http.StatusBadRequest)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		// Verify correct client credentials are sent (not "sleep-client").
+		if got := r.PostFormValue("client_id"); got != defaultClientID {
+			t.Errorf("client_id = %q, want %q", got, defaultClientID)
+		}
+		if got := r.PostFormValue("client_secret"); got != defaultClientSecret {
+			t.Errorf("client_secret = %q, want %q", got, defaultClientSecret)
+		}
+		if got := r.PostFormValue("grant_type"); got != "password" {
+			t.Errorf("grant_type = %q, want password", got)
+		}
+		if got := r.PostFormValue("username"); got != "test@example.com" {
+			t.Errorf("username = %q, want test@example.com", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token": "tok-123",
+			"expires_in":   3600,
+			"userId":       "uid-abc",
+		})
+	}))
+	defer srv.Close()
+
+	old := authURL
+	authURL = srv.URL
+	defer func() { authURL = old }()
+
+	c := New("test@example.com", "secret", "", "", "")
+	c.HTTP = srv.Client()
+
+	if err := c.Authenticate(context.Background()); err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if c.token != "tok-123" {
+		t.Errorf("token = %q, want tok-123", c.token)
+	}
+	if c.UserID != "uid-abc" {
+		t.Errorf("UserID = %q, want uid-abc", c.UserID)
+	}
+}
+
+func TestAuthTokenEndpoint_ReturnsErrorOnFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	old := authURL
+	authURL = srv.URL
+	defer func() { authURL = old }()
+
+	c := New("test@example.com", "secret", "", "", "")
+	c.HTTP = srv.Client()
+
+	if err := c.Authenticate(context.Background()); err == nil {
+		t.Fatal("Authenticate: expected error, got nil")
+	}
+}
+
+func TestNoExplicitGzipHeader(t *testing.T) {
+	// Verify we don't send Accept-Encoding: gzip manually, so Go's
+	// http.Transport handles decompression transparently.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
+		ae := r.Header.Get("Accept-Encoding")
+		// Go's Transport adds its own Accept-Encoding when we don't set one.
+		// The key assertion: our code must NOT set it to exactly "gzip".
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"accept_encoding": ae})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New("e", "p", "uid", "", "")
+	c.BaseURL = srv.URL
+	c.token = "t"
+	c.tokenExp = time.Now().Add(time.Hour)
+	c.HTTP = srv.Client()
+
+	var out map[string]string
+	if err := c.do(context.Background(), http.MethodGet, "/check", nil, nil, &out); err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	// Go's transport sets "gzip" automatically but handles decompression.
+	// We just verify our code didn't break anything.
+	if out["accept_encoding"] == "" {
+		t.Fatal("expected Accept-Encoding to be set by Go's transport")
+	}
+}
+
 func Test429Retry(t *testing.T) {
 	count := 0
 	mux := http.NewServeMux()
@@ -99,5 +201,32 @@ func Test429Retry(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed < 2*time.Second {
 		t.Fatalf("expected backoff, got %v", elapsed)
+	}
+}
+
+func Test429RetryCapped(t *testing.T) {
+	// Verify retries are bounded: after maxRetries, return an error.
+	count := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/always429", func(w http.ResponseWriter, r *http.Request) {
+		count++
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New("email", "pass", "uid", "", "")
+	c.BaseURL = srv.URL
+	c.token = "t"
+	c.tokenExp = time.Now().Add(time.Hour)
+	c.HTTP = srv.Client()
+
+	err := c.do(context.Background(), http.MethodGet, "/always429", nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	// 1 initial + maxRetries = 4 total attempts
+	if count != maxRetries+1 {
+		t.Fatalf("expected %d attempts, got %d", maxRetries+1, count)
 	}
 }

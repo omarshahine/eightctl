@@ -18,11 +18,13 @@ import (
 
 const (
 	defaultBaseURL = "https://client-api.8slp.net/v1"
-	authURL        = "https://auth-api.8slp.net/v1/tokens"
 	// Extracted from the official Eight Sleep Android app v7.39.17 (public client creds)
 	defaultClientID     = "0894c7f33bb94800a03f1f4df13a4f38"
 	defaultClientSecret = "f0954a3ed5763ba3d06834c73731a32f15f168f47d4f164751275def86db0c76"
 )
+
+// authURL is a var so tests can point it at a local server.
+var authURL = "https://auth-api.8slp.net/v1/tokens"
 
 // Client represents Eight Sleep API client.
 type Client struct {
@@ -65,12 +67,9 @@ func New(email, password, userID, clientID, clientSecret string) *Client {
 	}
 }
 
-// Authenticate fetches bearer token. Tries OAuth token endpoint first; falls back to /login used by app.
+// Authenticate fetches a bearer token via the OAuth password-grant endpoint.
 func (c *Client) Authenticate(ctx context.Context) error {
-	if err := c.authTokenEndpoint(ctx); err == nil {
-		return nil
-	}
-	return c.authLegacyLogin(ctx)
+	return c.authTokenEndpoint(ctx)
 }
 
 // EnsureUserID populates UserID by calling /users/me if missing.
@@ -116,19 +115,18 @@ func (c *Client) EnsureDeviceID(ctx context.Context) (string, error) {
 }
 
 func (c *Client) authTokenEndpoint(ctx context.Context) error {
-	payload := map[string]string{
-		"grant_type":    "password",
-		"username":      c.Email,
-		"password":      c.Password,
-		"client_id":     "sleep-client",
-		"client_secret": "",
-	}
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authURL, bytes.NewReader(body))
+	form := url.Values{}
+	form.Set("grant_type", "password")
+	form.Set("username", c.Email)
+	form.Set("password", c.Password)
+	form.Set("client_id", c.ClientID)
+	form.Set("client_secret", c.ClientSecret)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authURL,
+		bytes.NewReader([]byte(form.Encode())))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -168,64 +166,6 @@ func (c *Client) authTokenEndpoint(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) authLegacyLogin(ctx context.Context) error {
-	payload := map[string]string{
-		"email":    c.Email,
-		"password": c.Password,
-	}
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/login", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Connection", "keep-alive")
-	req.Header.Set("User-Agent", "okhttp/4.9.3")
-	req.Header.Set("Accept-Encoding", "gzip")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
-		log.Debug("legacy login failed", "status", resp.Status, "headers", resp.Header, "body", string(b))
-		return fmt.Errorf("login failed: %s", string(b))
-	}
-	var res struct {
-		Session struct {
-			UserID         string `json:"userId"`
-			Token          string `json:"token"`
-			ExpirationDate string `json:"expirationDate"`
-		} `json:"session"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return err
-	}
-	if res.Session.Token == "" {
-		return errors.New("empty session token")
-	}
-	c.token = res.Session.Token
-	if res.Session.ExpirationDate != "" {
-		if t, err := time.Parse(time.RFC3339, res.Session.ExpirationDate); err == nil {
-			c.tokenExp = t
-		}
-	}
-	if c.tokenExp.IsZero() {
-		c.tokenExp = time.Now().Add(12 * time.Hour)
-	}
-	if c.UserID == "" {
-		c.UserID = res.Session.UserID
-	}
-	if err := tokencache.Save(c.Identity(), c.token, c.tokenExp, c.UserID); err != nil {
-		log.Debug("failed to cache token", "error", err)
-	} else {
-		log.Debug("saved token to cache (legacy)", "expires_at", c.tokenExp)
-	}
-	return nil
-}
-
 func (c *Client) ensureToken(ctx context.Context) error {
 	if c.token != "" && time.Now().Before(c.tokenExp) {
 		log.Debug("using in-memory token", "expires_in", time.Until(c.tokenExp).Round(time.Second))
@@ -256,7 +196,13 @@ func (c *Client) requireUser(ctx context.Context) error {
 	return c.EnsureUserID(ctx)
 }
 
+const maxRetries = 3
+
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, out any) error {
+	return c.doRetry(ctx, method, path, query, body, out, 0)
+}
+
+func (c *Client) doRetry(ctx context.Context, method, path string, query url.Values, body any, out any, attempt int) error {
 	if err := c.ensureToken(ctx); err != nil {
 		return err
 	}
@@ -281,7 +227,9 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("User-Agent", "okhttp/4.9.3")
-	req.Header.Set("Accept-Encoding", "gzip")
+	// Note: we intentionally do NOT set Accept-Encoding. Go's http.Transport
+	// handles gzip transparently when the header is absent. Setting it
+	// explicitly disables automatic decompression.
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -289,16 +237,22 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		time.Sleep(2 * time.Second)
-		return c.do(ctx, method, path, query, body, out)
+		if attempt >= maxRetries {
+			return fmt.Errorf("rate limited after %d retries: %s %s", maxRetries, method, path)
+		}
+		time.Sleep(time.Duration(2*(attempt+1)) * time.Second)
+		return c.doRetry(ctx, method, path, query, body, out, attempt+1)
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
+		if attempt >= maxRetries {
+			return fmt.Errorf("unauthorized after %d retries: %s %s", maxRetries, method, path)
+		}
 		c.token = ""
 		_ = tokencache.Clear(c.Identity())
 		if err := c.ensureToken(ctx); err != nil {
 			return err
 		}
-		return c.do(ctx, method, path, query, body, out)
+		return c.doRetry(ctx, method, path, query, body, out, attempt+1)
 	}
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
