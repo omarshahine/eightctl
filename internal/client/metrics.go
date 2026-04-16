@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 type MetricsActions struct{ c *Client }
@@ -22,9 +23,7 @@ func (m *MetricsActions) Trends(ctx context.Context, from, to, tz string, out an
 	if to != "" {
 		q.Set("to", to)
 	}
-	if tz != "" {
-		q.Set("tz", tz)
-	}
+	q.Set("tz", resolveTZ(tz))
 	q.Set("include-main", "false")
 	q.Set("include-all-sessions", "true")
 	q.Set("model-version", "v2")
@@ -40,31 +39,22 @@ func (m *MetricsActions) Intervals(ctx context.Context, sessionID string, out an
 	return m.c.do(ctx, http.MethodGet, path, nil, nil, out)
 }
 
-func (m *MetricsActions) Summary(ctx context.Context, out any) error {
-	if err := m.c.requireUser(ctx); err != nil {
-		return err
-	}
-	q := url.Values{}
-	q.Set("metrics", "all")
-	path := fmt.Sprintf("/users/%s/metrics/summary", m.c.UserID)
-	return m.c.do(ctx, http.MethodGet, path, q, nil, out)
-}
-
-func (m *MetricsActions) Aggregate(ctx context.Context, out any) error {
-	if err := m.c.requireUser(ctx); err != nil {
-		return err
-	}
-	q := url.Values{}
-	q.Set("v2", "true")
-	q.Set("metrics", "all")
-	path := fmt.Sprintf("/users/%s/metrics/aggregate", m.c.UserID)
-	return m.c.do(ctx, http.MethodGet, path, q, nil, out)
-}
-
 func (m *MetricsActions) Insights(ctx context.Context, out any) error {
 	if err := m.c.requireUser(ctx); err != nil {
 		return err
 	}
 	path := fmt.Sprintf("/users/%s/insights", m.c.UserID)
 	return m.c.do(ctx, http.MethodGet, path, nil, nil, out)
+}
+
+// resolveTZ maps "" or "local" to the system's IANA zone name. The Eight
+// Sleep API rejects literal "local" and requires a real zone.
+func resolveTZ(tz string) string {
+	if tz == "" || tz == "local" {
+		if name := time.Local.String(); name != "" && name != "Local" {
+			return name
+		}
+		return "UTC"
+	}
+	return tz
 }
