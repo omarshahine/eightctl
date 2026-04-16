@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -25,6 +27,10 @@ var scheduleListCmd = &cobra.Command{
 		cl := client.New(viper.GetString("email"), viper.GetString("password"), viper.GetString("user_id"), viper.GetString("client_id"), viper.GetString("client_secret"))
 		smart, err := cl.GetSmartSchedule(context.Background())
 		if err != nil {
+			if errors.Is(err, client.ErrNoSmartSchedule) {
+				fmt.Fprintln(cmd.OutOrStdout(), "no Autopilot schedule configured for this user")
+				return nil
+			}
 			return err
 		}
 		return output.Print(output.Format(viper.GetString("output")), []string{"smart"}, []map[string]any{{"smart": smart}})

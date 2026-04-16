@@ -391,7 +391,7 @@ func (c *Client) GetSleepDay(ctx context.Context, date string, timezone string) 
 		return nil, err
 	}
 	q := url.Values{}
-	q.Set("tz", timezone)
+	q.Set("tz", resolveTZ(timezone))
 	q.Set("from", date)
 	q.Set("to", date)
 	q.Set("include-main", "false")
@@ -432,6 +432,23 @@ func (c *Client) ListTracks(ctx context.Context) ([]AudioTrack, error) {
 type ReleaseFeature struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
+}
+
+// resolveTZ converts the CLI-convention zone "" or "local" to an IANA zone
+// name. Eight Sleep's tz param rejects the literal strings "local" and
+// "Local" (the latter is what time.Local.String() returns when the system
+// has no zoneinfo). UTC is used as a last-resort fallback and logged so
+// off-by-hours trend data is not presented as correct.
+func resolveTZ(tz string) string {
+	if tz != "" && tz != "local" {
+		return tz
+	}
+	name := time.Local.String()
+	if name == "" || name == "Local" {
+		log.Warn("system timezone unresolved; defaulting to UTC. Pass --timezone <IANA> to override.")
+		return "UTC"
+	}
+	return name
 }
 
 func (c *Client) ReleaseFeatures(ctx context.Context) ([]ReleaseFeature, error) {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"time"
 )
 
 type MetricsActions struct{ c *Client }
@@ -45,16 +44,4 @@ func (m *MetricsActions) Insights(ctx context.Context, out any) error {
 	}
 	path := fmt.Sprintf("/users/%s/insights", m.c.UserID)
 	return m.c.do(ctx, http.MethodGet, path, nil, nil, out)
-}
-
-// resolveTZ maps "" or "local" to the system's IANA zone name. The Eight
-// Sleep API rejects literal "local" and requires a real zone.
-func resolveTZ(tz string) string {
-	if tz == "" || tz == "local" {
-		if name := time.Local.String(); name != "" && name != "Local" {
-			return name
-		}
-		return "UTC"
-	}
-	return tz
 }
