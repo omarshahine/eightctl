@@ -33,13 +33,14 @@ eightctl daemon --dry-run
 
 ## Command Surface
 - **Power & temp:** `on`, `off`, `temp <level>`, `status`
-- **Schedules & daemon:** `schedule list|create|update|delete|next`, `daemon`
+- **Away mode:** `away on|off`
+- **Schedules & daemon:** `schedule list` (Autopilot/smart schedule), `daemon`
 - **Alarms:** `alarm list|create|update|delete|snooze|dismiss|dismiss-all|vibration-test`
 - **Temperature modes:** `tempmode nap on|off|extend|status`, `tempmode hotflash on|off|status`, `tempmode events`
 - **Audio:** `audio tracks|categories|state|play|pause|seek|volume|pair|next`, `audio favorites list|add|remove`
 - **Base:** `base info|angle|presets|preset-run|vibration-test`
 - **Device:** `device info|peripherals|owner|warranty|online|priming-tasks|priming-schedule`
-- **Metrics & insights:** `sleep day|range`, `presence`, `metrics trends|intervals|summary|aggregate|insights`
+- **Metrics & insights:** `sleep day|range`, `presence`, `metrics trends|intervals|insights`
 - **Autopilot:** `autopilot details|history|recap`, `autopilot set-level-suggestions`, `autopilot set-snore-mitigation`
 - **Travel:** `travel trips|create-trip|delete-trip|plans|create-plan|update-plan|tasks|airport-search|flight-status`
 - **Household:** `household summary|schedule|current-set|invitations|devices|users|guests`
@@ -59,7 +60,10 @@ Key fields: `email`, `password`, optional `user_id`, `client_id`, `client_secret
 
 ## Known API realities
 - The API is undocumented and rate-limited; repeated logins can return 429. The client now mimics Android app headers and reuses tokens to reduce throttling, but cooldowns may still apply.
+- Authentication uses the OAuth2 password grant against `auth-api.8slp.net/v1/tokens` with `application/x-www-form-urlencoded` bodies. The legacy `/login` JSON endpoint is no longer called.
 - HTTPS only; no local/Bluetooth control exposed here.
+- Eight Sleep retired the temperature-schedules/routines CRUD API; `schedule list` now surfaces the Autopilot (smart) schedule from the `smart` subfield of `app-api.8slp.net/v1/users/:id/temperature`. `metrics summary` / `metrics aggregate` were removed because the underlying endpoints no longer exist — use `metrics trends` instead.
+- The `tz` query param rejects the literal strings `local` / `Local`. The client resolves `--timezone local` (the default) to a real IANA zone, falling back to `UTC` with a warning when the system has no zoneinfo.
 
 ## Prior Work / References
 - Go CLI `clim8`: https://github.com/blacktop/clim8
