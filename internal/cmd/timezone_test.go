@@ -49,10 +49,10 @@ func TestResolveAPITimezoneFallsBackToUTCWhenLocalIsUnknown(t *testing.T) {
 
 func TestExtractZoneinfoSuffix(t *testing.T) {
 	cases := map[string]string{
-		"/var/db/timezone/zoneinfo/America/New_York":                 "America/New_York",
-		"/private/var/db/timezone/tz/2024a.1.0/zoneinfo/Etc/UTC":     "Etc/UTC",
-		"/usr/share/zoneinfo/Europe/Berlin":                          "Europe/Berlin",
-		"no-zoneinfo-here":                                           "",
+		"/var/db/timezone/zoneinfo/America/New_York":             "America/New_York",
+		"/private/var/db/timezone/tz/2024a.1.0/zoneinfo/Etc/UTC": "Etc/UTC",
+		"/usr/share/zoneinfo/Europe/Berlin":                      "Europe/Berlin",
+		"no-zoneinfo-here":                                       "",
 	}
 	for input, want := range cases {
 		if got := extractZoneinfoSuffix(input); got != want {

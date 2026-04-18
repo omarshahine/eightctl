@@ -197,14 +197,15 @@ type unwritableKeyring struct{}
 
 var errUnwritable = errors.New("keyring: write denied")
 
-func (unwritableKeyring) Set(keyring.Item) error      { return errUnwritable }
+func (unwritableKeyring) Set(keyring.Item) error { return errUnwritable }
 func (unwritableKeyring) Get(string) (keyring.Item, error) {
 	return keyring.Item{}, keyring.ErrKeyNotFound
 }
+
 func (unwritableKeyring) GetMetadata(string) (keyring.Metadata, error) {
 	return keyring.Metadata{}, keyring.ErrKeyNotFound
 }
-func (unwritableKeyring) Remove(string) error    { return keyring.ErrKeyNotFound }
+func (unwritableKeyring) Remove(string) error     { return keyring.ErrKeyNotFound }
 func (unwritableKeyring) Keys() ([]string, error) { return nil, nil }
 
 func TestSaveFallsBackToFileWhenPrimarySetFails(t *testing.T) {
