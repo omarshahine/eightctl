@@ -55,6 +55,9 @@ func (c *Client) HouseholdUserTargets(ctx context.Context) ([]HouseholdUserTarge
 	if err := c.do(ctx, http.MethodGet, path, query, nil, &deviceRes); err != nil {
 		return nil, err
 	}
+
+	sideByUser := sideAssignmentsFromDevice(deviceRes.Result.LeftUserID, deviceRes.Result.RightUserID, deviceRes.Result.AwaySides)
+
 	userIDs := orderedUniqueStrings(
 		deviceRes.Result.LeftUserID,
 		deviceRes.Result.RightUserID,
@@ -80,7 +83,7 @@ func (c *Client) HouseholdUserTargets(ctx context.Context) ([]HouseholdUserTarge
 		}
 		targets = append(targets, HouseholdUserTarget{
 			UserID:    userRes.User.UserID,
-			Side:      strings.ToLower(strings.TrimSpace(userRes.User.CurrentDevice.Side)),
+			Side:      resolveTargetSide(sideByUser[userRes.User.UserID], userRes.User.CurrentDevice.Side),
 			FirstName: userRes.User.FirstName,
 			LastName:  userRes.User.LastName,
 			Email:     userRes.User.Email,
@@ -90,6 +93,45 @@ func (c *Client) HouseholdUserTargets(ctx context.Context) ([]HouseholdUserTarge
 		targets[0].Side = "solo"
 	}
 	return targets, nil
+}
+
+// sideAssignmentsFromDevice builds a userID -> side map from the /devices payload.
+// In Away mode the top-level leftUserId/rightUserId come back empty and the
+// real IDs are stashed inside awaySides as {"leftUserId":"…","rightUserId":"…"}.
+func sideAssignmentsFromDevice(leftUserID, rightUserID string, awaySides map[string]string) map[string]string {
+	if leftUserID == "" {
+		leftUserID = awaySides["leftUserId"]
+	}
+	if rightUserID == "" {
+		rightUserID = awaySides["rightUserId"]
+	}
+	out := map[string]string{}
+	switch {
+	case leftUserID != "" && rightUserID != "" && leftUserID == rightUserID:
+		out[leftUserID] = "solo"
+	case leftUserID != "" && rightUserID != "":
+		out[leftUserID] = "left"
+		out[rightUserID] = "right"
+	case leftUserID != "" && rightUserID == "":
+		out[leftUserID] = "solo"
+	case leftUserID == "" && rightUserID != "":
+		out[rightUserID] = "solo"
+	}
+	return out
+}
+
+// resolveTargetSide prefers the device-level assignment and ignores
+// user.currentDevice.side when it is the Away-mode sentinel.
+func resolveTargetSide(deviceAssigned, userReported string) string {
+	if deviceAssigned != "" {
+		return deviceAssigned
+	}
+	candidate := strings.ToLower(strings.TrimSpace(userReported))
+	switch candidate {
+	case "left", "right", "solo":
+		return candidate
+	}
+	return ""
 }
 
 // ResolveHouseholdSide resolves a single user target for left/right/solo side-aware commands.
@@ -104,7 +146,8 @@ func ResolveHouseholdSide(targets []HouseholdUserTarget, side string) (*Househol
 	matches := []HouseholdUserTarget{}
 	available := []string{}
 	for _, target := range targets {
-		if target.Side != "" {
+		switch target.Side {
+		case "left", "right", "solo":
 			available = appendUniqueString(available, target.Side)
 		}
 		if target.Side == side {

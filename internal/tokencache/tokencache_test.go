@@ -1,6 +1,7 @@
 package tokencache
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -187,6 +188,54 @@ func TestLoadWithoutEmailMultipleMatchesFails(t *testing.T) {
 	}
 	if _, err := Load(common, ""); err != keyring.ErrKeyNotFound {
 		t.Fatalf("expected not found when multiple matches, got %v", err)
+	}
+}
+
+// unwritableKeyring simulates a backend like the macOS login keychain when the
+// current session has no writable keychain: Open and Get succeed, but Set fails.
+type unwritableKeyring struct{}
+
+var errUnwritable = errors.New("keyring: write denied")
+
+func (unwritableKeyring) Set(keyring.Item) error      { return errUnwritable }
+func (unwritableKeyring) Get(string) (keyring.Item, error) {
+	return keyring.Item{}, keyring.ErrKeyNotFound
+}
+func (unwritableKeyring) GetMetadata(string) (keyring.Metadata, error) {
+	return keyring.Metadata{}, keyring.ErrKeyNotFound
+}
+func (unwritableKeyring) Remove(string) error    { return keyring.ErrKeyNotFound }
+func (unwritableKeyring) Keys() ([]string, error) { return nil, nil }
+
+func TestSaveFallsBackToFileWhenPrimarySetFails(t *testing.T) {
+	tmp := t.TempDir()
+
+	restorePrimary := SetOpenKeyringForTest(func() (keyring.Keyring, error) {
+		return unwritableKeyring{}, nil
+	})
+	t.Cleanup(restorePrimary)
+
+	restoreFile := SetOpenFileKeyringForTest(func() (keyring.Keyring, error) {
+		return keyring.Open(keyring.Config{
+			ServiceName:      serviceName + "-test",
+			AllowedBackends:  []keyring.BackendType{keyring.FileBackend},
+			FileDir:          filepath.Join(tmp, "keyring"),
+			FilePasswordFunc: func(_ string) (string, error) { return "test-pass", nil },
+		})
+	})
+	t.Cleanup(restoreFile)
+
+	id := Identity{BaseURL: "https://api.example.com", ClientID: "client-1", Email: "u@example.com"}
+	if err := Save(id, "tok", time.Now().Add(time.Hour), "u1"); err != nil {
+		t.Fatalf("Save should fall back to file: %v", err)
+	}
+
+	got, err := Load(id, "u1")
+	if err != nil {
+		t.Fatalf("Load from file fallback: %v", err)
+	}
+	if got.Token != "tok" {
+		t.Fatalf("token = %q, want tok", got.Token)
 	}
 }
 
