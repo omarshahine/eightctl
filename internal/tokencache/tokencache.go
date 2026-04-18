@@ -34,7 +34,10 @@ type Identity struct {
 	Email    string
 }
 
-var openKeyring = defaultOpenKeyring
+var (
+	openKeyring     = defaultOpenKeyring
+	openFileKeyring = defaultOpenFileKeyring
+)
 
 // SetOpenKeyringForTest swaps the keyring opener; it returns a restore func.
 // Not safe for concurrent tests; intended for isolated test scenarios.
@@ -42,6 +45,14 @@ func SetOpenKeyringForTest(fn func() (keyring.Keyring, error)) (restore func()) 
 	prev := openKeyring
 	openKeyring = fn
 	return func() { openKeyring = prev }
+}
+
+// SetOpenFileKeyringForTest swaps the file-backed fallback opener.
+// Use with SetOpenKeyringForTest to exercise the fallback path in isolation.
+func SetOpenFileKeyringForTest(fn func() (keyring.Keyring, error)) (restore func()) {
+	prev := openFileKeyring
+	openFileKeyring = fn
+	return func() { openFileKeyring = prev }
 }
 
 func defaultOpenKeyring() (keyring.Keyring, error) {
@@ -59,16 +70,21 @@ func defaultOpenKeyring() (keyring.Keyring, error) {
 	})
 }
 
+func defaultOpenFileKeyring() (keyring.Keyring, error) {
+	home, _ := os.UserHomeDir()
+	return keyring.Open(keyring.Config{
+		ServiceName:      serviceName,
+		AllowedBackends:  []keyring.BackendType{keyring.FileBackend},
+		FileDir:          filepath.Join(home, ".config", "eightctl", "keyring"),
+		FilePasswordFunc: filePassword,
+	})
+}
+
 func filePassword(_ string) (string, error) {
 	return serviceName + "-fallback", nil
 }
 
 func Save(id Identity, token string, expiresAt time.Time, userID string) error {
-	ring, err := openKeyring()
-	if err != nil {
-		log.Debug("keyring open failed (save)", "error", err)
-		return err
-	}
 	data, err := json.Marshal(CachedToken{
 		Token:     token,
 		ExpiresAt: expiresAt,
@@ -77,20 +93,55 @@ func Save(id Identity, token string, expiresAt time.Time, userID string) error {
 	if err != nil {
 		return err
 	}
-	if err := ring.Set(keyring.Item{
+	item := keyring.Item{
 		Key:   storageKey(id),
 		Label: serviceName + " token",
 		Data:  data,
-	}); err != nil {
-		log.Debug("keyring set failed", "error", err)
-		return err
 	}
-	log.Debug("keyring saved token")
+
+	primaryErr := trySetWith(openKeyring, item)
+	if primaryErr == nil {
+		log.Debug("keyring saved token")
+		return nil
+	}
+	log.Debug("primary keyring set failed; falling back to file backend", "error", primaryErr)
+
+	if fileErr := trySetWith(openFileKeyring, item); fileErr != nil {
+		log.Debug("file keyring set failed", "error", fileErr)
+		return primaryErr
+	}
+	log.Debug("keyring saved token to file fallback")
 	return nil
 }
 
+func trySetWith(opener func() (keyring.Keyring, error), item keyring.Item) error {
+	ring, err := opener()
+	if err != nil {
+		return err
+	}
+	return ring.Set(item)
+}
+
 func Load(id Identity, expectedUserID string) (*CachedToken, error) {
-	ring, err := openKeyring()
+	cached, err := loadFrom(openKeyring, id, expectedUserID)
+	if err == nil {
+		return cached, nil
+	}
+	if err != keyring.ErrKeyNotFound {
+		log.Debug("primary keyring load failed", "error", err)
+	}
+	fallback, fallbackErr := loadFrom(openFileKeyring, id, expectedUserID)
+	if fallbackErr == nil {
+		return fallback, nil
+	}
+	if fallbackErr != keyring.ErrKeyNotFound {
+		log.Debug("file keyring load failed", "error", fallbackErr)
+	}
+	return nil, err
+}
+
+func loadFrom(opener func() (keyring.Keyring, error), id Identity, expectedUserID string) (*CachedToken, error) {
+	ring, err := opener()
 	if err != nil {
 		log.Debug("keyring open failed (load)", "error", err)
 		return nil, err
@@ -116,7 +167,6 @@ func Load(id Identity, expectedUserID string) (*CachedToken, error) {
 		}
 	}
 	if err != nil {
-		log.Debug("keyring get failed", "error", err)
 		return nil, err
 	}
 	var cached CachedToken
@@ -134,7 +184,16 @@ func Load(id Identity, expectedUserID string) (*CachedToken, error) {
 }
 
 func Clear(id Identity) error {
-	ring, err := openKeyring()
+	primaryErr := clearFrom(openKeyring, id)
+	fallbackErr := clearFrom(openFileKeyring, id)
+	if primaryErr != nil && fallbackErr != nil {
+		return primaryErr
+	}
+	return nil
+}
+
+func clearFrom(opener func() (keyring.Keyring, error), id Identity) error {
+	ring, err := opener()
 	if err != nil {
 		return err
 	}

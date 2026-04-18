@@ -106,6 +106,61 @@ func TestHouseholdUserTargets(t *testing.T) {
 	}
 }
 
+func TestHouseholdUserTargetsUsesDeviceMappingInAwayMode(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"user":{"devices":["dev-1"]}}`))
+	})
+	mux.HandleFunc("/devices/dev-1", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// In Away mode the API blanks top-level leftUserId/rightUserId and
+		// stashes them inside awaySides with the original field names.
+		w.Write([]byte(`{"result":{"awaySides":{"leftUserId":"left-user","rightUserId":"right-user"}}}`))
+	})
+	// In Away mode the user payload reports side "away" for everyone.
+	mux.HandleFunc("/users/left-user", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"user":{"userId":"left-user","firstName":"Igor","lastName":"Left","email":"left@example.com","currentDevice":{"side":"away"}}}`))
+	})
+	mux.HandleFunc("/users/right-user", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"user":{"userId":"right-user","firstName":"Renata","lastName":"Right","email":"right@example.com","currentDevice":{"side":"away"}}}`))
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New("email", "pass", "", "", "")
+	c.BaseURL = srv.URL
+	c.token = "t"
+	c.tokenExp = time.Now().Add(time.Hour)
+	c.HTTP = srv.Client()
+
+	targets, err := c.HouseholdUserTargets(context.Background())
+	if err != nil {
+		t.Fatalf("HouseholdUserTargets: %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("len(targets) = %d, want 2", len(targets))
+	}
+	sideByID := map[string]string{}
+	for _, target := range targets {
+		sideByID[target.UserID] = target.Side
+	}
+	if sideByID["left-user"] != "left" || sideByID["right-user"] != "right" {
+		t.Fatalf("side map = %+v, want left/right", sideByID)
+	}
+
+	resolved, err := ResolveHouseholdSide(targets, "left")
+	if err != nil {
+		t.Fatalf("ResolveHouseholdSide left: %v", err)
+	}
+	if resolved.UserID != "left-user" {
+		t.Fatalf("left target user = %q, want left-user", resolved.UserID)
+	}
+}
+
 func TestHouseholdUserTargetsInfersSoloWhenOnlyOneUserExists(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/users/me", func(w http.ResponseWriter, r *http.Request) {
