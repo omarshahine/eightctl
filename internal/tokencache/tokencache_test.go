@@ -12,8 +12,7 @@ import (
 func withTestKeyring(t *testing.T) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	orig := openKeyring
-	openKeyring = func() (keyring.Keyring, error) {
+	opener := func() (keyring.Keyring, error) {
 		return keyring.Open(keyring.Config{
 			ServiceName:      serviceName + "-test",
 			AllowedBackends:  []keyring.BackendType{keyring.FileBackend},
@@ -21,7 +20,14 @@ func withTestKeyring(t *testing.T) {
 			FilePasswordFunc: func(_ string) (string, error) { return "test-pass", nil },
 		})
 	}
-	t.Cleanup(func() { openKeyring = orig })
+	origKeyring := openKeyring
+	origFile := openFileKeyring
+	openKeyring = opener
+	openFileKeyring = opener
+	t.Cleanup(func() {
+		openKeyring = origKeyring
+		openFileKeyring = origFile
+	})
 }
 
 func TestSaveLoadRoundTrip(t *testing.T) {
