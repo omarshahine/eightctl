@@ -211,7 +211,7 @@ func (unwritableKeyring) Get(string) (keyring.Item, error) {
 func (unwritableKeyring) GetMetadata(string) (keyring.Metadata, error) {
 	return keyring.Metadata{}, keyring.ErrKeyNotFound
 }
-func (unwritableKeyring) Remove(string) error     { return keyring.ErrKeyNotFound }
+func (unwritableKeyring) Remove(string) error     { return errUnwritable }
 func (unwritableKeyring) Keys() ([]string, error) { return nil, nil }
 
 func TestSaveFallsBackToFileWhenPrimarySetFails(t *testing.T) {

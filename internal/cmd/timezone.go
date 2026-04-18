@@ -23,11 +23,12 @@ func resolveAPITimezone(value string) (string, error) {
 	return "UTC", nil
 }
 
-// localIANA discovers the IANA zone name the OS considers local. Go's
-// time.Local.String() reports "Local" when TZ is unset, which the Eight Sleep
-// API rejects, so we read the platform-specific source of truth.
+// localIANA is overridable in tests.
 var localIANA = defaultLocalIANA
 
+// defaultLocalIANA discovers the IANA zone name the OS considers local. Go's
+// time.Local.String() reports "Local" when TZ is unset, which the Eight Sleep
+// API rejects, so we read the platform-specific source of truth.
 func defaultLocalIANA() string {
 	if tz := strings.TrimSpace(os.Getenv("TZ")); tz != "" && !strings.EqualFold(tz, "local") {
 		return tz
