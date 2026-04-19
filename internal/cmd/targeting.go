@@ -88,14 +88,25 @@ func resolveCommandTargetValues(ctx context.Context, cl *client.Client, targetUs
 }
 
 func targetSuffix(target *client.HouseholdUserTarget) string {
+	scope := targetScope(target)
+	if scope == "" {
+		return ""
+	}
+	return " for " + scope
+}
+
+// targetScope returns a human-readable label for a resolved target
+// ("side left", "user abc-123", or "" when nothing is selected). Useful when
+// the caller wants to compose the label into something other than a suffix.
+func targetScope(target *client.HouseholdUserTarget) string {
 	if target == nil {
 		return ""
 	}
 	if side := strings.TrimSpace(target.Side); side != "" {
-		return " for side " + side
+		return "side " + side
 	}
 	if target.UserID != "" {
-		return " for user " + target.UserID
+		return "user " + target.UserID
 	}
 	return ""
 }

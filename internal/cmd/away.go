@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -42,7 +41,10 @@ func runAway(cmd *cobra.Command, on bool) error {
 		return err
 	}
 
-	action := map[bool]string{true: "activated", false: "deactivated"}[on]
+	action := "activated"
+	if !on {
+		action = "deactivated"
+	}
 	var scope string
 
 	switch {
@@ -67,7 +69,7 @@ func runAway(cmd *cobra.Command, on bool) error {
 		if err := cl.SetAwayMode(ctx, target.UserID, on); err != nil {
 			return fmt.Errorf("setting away for %s: %w", target.UserID, err)
 		}
-		scope = strings.TrimPrefix(targetSuffix(target), " for ")
+		scope = targetScope(target)
 		if scope == "" {
 			scope = "selected target"
 		}

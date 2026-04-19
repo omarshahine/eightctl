@@ -62,3 +62,25 @@ func TestRequireAuthFieldsFailsWithoutCacheOrCreds(t *testing.T) {
 		t.Fatalf("expected missing credentials error")
 	}
 }
+
+// When an explicit user_id is already set (e.g. via --user-id or config),
+// the cached UserID must not overwrite it. Households share one cached token
+// across multiple userIDs, so clobbering would silently retarget commands.
+func TestRequireAuthFieldsDoesNotClobberExplicitUserID(t *testing.T) {
+	useTempKeyring(t)
+	resetViper(t)
+
+	viper.Set("user_id", "explicit-user")
+
+	cl := client.New("", "", "explicit-user", "", "")
+	if err := tokencache.Save(cl.Identity(), "tok", time.Now().Add(time.Hour), "cached-user"); err != nil {
+		t.Fatalf("save cache: %v", err)
+	}
+
+	if err := requireAuthFields(); err != nil {
+		t.Fatalf("requireAuthFields should pass with cache: %v", err)
+	}
+	if got := viper.GetString("user_id"); got != "explicit-user" {
+		t.Fatalf("explicit user_id was overwritten, got %q", got)
+	}
+}
