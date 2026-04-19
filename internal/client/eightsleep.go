@@ -183,7 +183,7 @@ func (c *Client) ensureToken(ctx context.Context) error {
 	}
 	// Trust cached tokens without server validation. If token is invalid,
 	// the server will return 401 and we'll clear cache + re-authenticate.
-	if cached, err := tokencache.Load(c.Identity(), c.UserID); err == nil {
+	if cached, err := tokencache.Load(c.Identity()); err == nil {
 		log.Debug("loaded token from cache", "expires_at", cached.ExpiresAt, "user_id", cached.UserID)
 		c.token = cached.Token
 		c.tokenExp = cached.ExpiresAt

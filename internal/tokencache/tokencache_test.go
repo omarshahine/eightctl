@@ -40,7 +40,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	got, err := Load(id, "user-1")
+	got, err := Load(id)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -55,14 +55,24 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestLoadSkipsMismatchedUser(t *testing.T) {
+// Households share one OAuth principal (email) across multiple userIDs, so a
+// token saved under "user-a" must still satisfy Load when the current call is
+// targeting "user-b". Identity-level namespacing is the authoritative boundary.
+func TestLoadReturnsTokenRegardlessOfStoredUserID(t *testing.T) {
 	withTestKeyring(t)
 	id := Identity{BaseURL: "https://api.example.com", ClientID: "client-1"}
 	if err := Save(id, "token", time.Now().Add(time.Hour), "user-a"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if _, err := Load(id, "user-b"); err != keyring.ErrKeyNotFound {
-		t.Fatalf("expected ErrKeyNotFound for mismatched user, got %v", err)
+	got, err := Load(id)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Token != "token" {
+		t.Errorf("token = %q, want token", got.Token)
+	}
+	if got.UserID != "user-a" {
+		t.Errorf("UserID metadata = %q, want user-a", got.UserID)
 	}
 }
 
@@ -72,11 +82,11 @@ func TestLoadExpiredRemovesEntry(t *testing.T) {
 	if err := Save(id, "expired", time.Now().Add(-time.Minute), "user-1"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if _, err := Load(id, "user-1"); err != keyring.ErrKeyNotFound {
+	if _, err := Load(id); err != keyring.ErrKeyNotFound {
 		t.Fatalf("expected ErrKeyNotFound for expired token, got %v", err)
 	}
 	// second load should still be ErrKeyNotFound (entry removed)
-	if _, err := Load(id, "user-1"); err != keyring.ErrKeyNotFound {
+	if _, err := Load(id); err != keyring.ErrKeyNotFound {
 		t.Fatalf("expected ErrKeyNotFound after removal, got %v", err)
 	}
 }
@@ -109,19 +119,16 @@ func TestNamespacingByIdentity(t *testing.T) {
 		t.Fatalf("Save D: %v", err)
 	}
 
-	if got, _ := Load(idA, "user-a"); got.Token != "token-a" {
+	if got, _ := Load(idA); got.Token != "token-a" {
 		t.Errorf("Load A token = %q, want token-a", got.Token)
 	}
-	if _, err := Load(idA, "user-b"); err != keyring.ErrKeyNotFound {
-		t.Errorf("Load A with user-b should miss, got %v", err)
-	}
-	if got, _ := Load(idB, "user-b"); got.Token != "token-b" {
+	if got, _ := Load(idB); got.Token != "token-b" {
 		t.Errorf("Load B token = %q, want token-b", got.Token)
 	}
-	if got, _ := Load(idC, "user-c"); got.Token != "token-c" {
+	if got, _ := Load(idC); got.Token != "token-c" {
 		t.Errorf("Load C token = %q, want token-c", got.Token)
 	}
-	if got, _ := Load(idD, ""); got.Token != "token-d" {
+	if got, _ := Load(idD); got.Token != "token-d" {
 		t.Errorf("Load D token = %q, want token-d", got.Token)
 	}
 }
@@ -141,10 +148,10 @@ func TestClearOnlyRemovesMatchingIdentity(t *testing.T) {
 	if err := Clear(idA); err != nil {
 		t.Fatalf("Clear A: %v", err)
 	}
-	if _, err := Load(idA, "user-a"); err != keyring.ErrKeyNotFound {
+	if _, err := Load(idA); err != keyring.ErrKeyNotFound {
 		t.Fatalf("expected A cleared, got %v", err)
 	}
-	if got, err := Load(idB, "user-b"); err != nil || got.Token != "token-b" {
+	if got, err := Load(idB); err != nil || got.Token != "token-b" {
 		t.Fatalf("B should remain, got %v err %v", got, err)
 	}
 }
@@ -174,7 +181,7 @@ func TestLoadWithoutEmailFindsSingleMatch(t *testing.T) {
 
 	// email omitted -> should still find the single token
 	idNoEmail := Identity{BaseURL: id.BaseURL, ClientID: id.ClientID}
-	cached, err := Load(idNoEmail, "user-1")
+	cached, err := Load(idNoEmail)
 	if err != nil {
 		t.Fatalf("Load without email: %v", err)
 	}
@@ -192,7 +199,7 @@ func TestLoadWithoutEmailMultipleMatchesFails(t *testing.T) {
 	if err := Save(Identity{BaseURL: common.BaseURL, ClientID: common.ClientID, Email: "b@example.com"}, "tb", time.Now().Add(time.Hour), "ub"); err != nil {
 		t.Fatalf("save b: %v", err)
 	}
-	if _, err := Load(common, ""); err != keyring.ErrKeyNotFound {
+	if _, err := Load(common); err != keyring.ErrKeyNotFound {
 		t.Fatalf("expected not found when multiple matches, got %v", err)
 	}
 }
@@ -237,7 +244,7 @@ func TestSaveFallsBackToFileWhenPrimarySetFails(t *testing.T) {
 		t.Fatalf("Save should fall back to file: %v", err)
 	}
 
-	got, err := Load(id, "u1")
+	got, err := Load(id)
 	if err != nil {
 		t.Fatalf("Load from file fallback: %v", err)
 	}

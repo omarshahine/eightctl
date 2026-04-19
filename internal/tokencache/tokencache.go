@@ -122,15 +122,20 @@ func trySetWith(opener func() (keyring.Keyring, error), item keyring.Item) error
 	return ring.Set(item)
 }
 
-func Load(id Identity, expectedUserID string) (*CachedToken, error) {
-	cached, err := loadFrom(openKeyring, id, expectedUserID)
+// Load returns the cached token for the given Identity, if present and unexpired.
+// Tokens are namespaced by Identity (base URL + client ID + email) — not by
+// UserID — because a single OAuth principal (email) can legitimately act on
+// multiple household userIDs. The cached UserID is informational metadata for
+// callers that want to recover "which userID was primary at auth time."
+func Load(id Identity) (*CachedToken, error) {
+	cached, err := loadFrom(openKeyring, id)
 	if err == nil {
 		return cached, nil
 	}
 	if err != keyring.ErrKeyNotFound {
 		log.Debug("primary keyring load failed", "error", err)
 	}
-	fallback, fallbackErr := loadFrom(openFileKeyring, id, expectedUserID)
+	fallback, fallbackErr := loadFrom(openFileKeyring, id)
 	if fallbackErr == nil {
 		return fallback, nil
 	}
@@ -140,7 +145,7 @@ func Load(id Identity, expectedUserID string) (*CachedToken, error) {
 	return nil, err
 }
 
-func loadFrom(opener func() (keyring.Keyring, error), id Identity, expectedUserID string) (*CachedToken, error) {
+func loadFrom(opener func() (keyring.Keyring, error), id Identity) (*CachedToken, error) {
 	ring, err := opener()
 	if err != nil {
 		log.Debug("keyring open failed (load)", "error", err)
@@ -175,9 +180,6 @@ func loadFrom(opener func() (keyring.Keyring, error), id Identity, expectedUserI
 	}
 	if time.Now().After(cached.ExpiresAt) {
 		_ = ring.Remove(key)
-		return nil, keyring.ErrKeyNotFound
-	}
-	if expectedUserID != "" && cached.UserID != "" && cached.UserID != expectedUserID {
 		return nil, keyring.ErrKeyNotFound
 	}
 	return &cached, nil

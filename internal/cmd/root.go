@@ -122,8 +122,8 @@ func requireAuthFields() error {
 		viper.GetString("client_id"),
 		viper.GetString("client_secret"),
 	)
-	if cached, err := tokencache.Load(c.Identity(), viper.GetString("user_id")); err == nil {
-		if cached.UserID != "" {
+	if cached, err := tokencache.Load(c.Identity()); err == nil {
+		if cached.UserID != "" && viper.GetString("user_id") == "" {
 			viper.Set("user_id", cached.UserID)
 		}
 		return nil
