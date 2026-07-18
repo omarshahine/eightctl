@@ -69,7 +69,7 @@ Key fields: `email`, `password`, optional `user_id`, `client_id`, `client_secret
 - Make: `make fmt` (tracked `go tool` gofumpt), `make lint` (golangci-lint), `make test`, `make coverage`.
 - Coverage: CI enforces >=85% on core packages (`internal/client`, `config`, `daemon`, `output`, `tokencache`); command wiring still runs through `go test ./...`.
 - CI: `.github/workflows/ci.yml` runs format, lint, tests, the coverage gate, and a release-artifact version smoke test.
-- Releases: `v*` tags publish GoReleaser archives whose embedded version and GitHub Release notes come from the tag and matching changelog section.
+- Releases: the manual `Release (unified)` workflow freezes a protected green `main`, creates the `v*` tag, publishes signed and notarized macOS binaries plus the GoReleaser matrix, and uses the matching changelog section for notes. `Release (legacy manual)` remains an explicit fallback for existing tags and never runs automatically.
 - pnpm scripts (optional): `pnpm eightctl|start|build|lint|format|test|coverage` (see package.json).
 
 ## Known API realities

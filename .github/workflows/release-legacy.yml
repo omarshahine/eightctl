@@ -1,13 +1,10 @@
-name: release
+name: Release (legacy manual)
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to (re)release (e.g. v0.1.0)"
+        description: "Legacy manual fallback for an existing tag; use Release (unified) for normal releases"
         required: true
         type: string
 
@@ -31,7 +28,7 @@ jobs:
 
       - name: Prepare release inputs
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "invalid release tag: $RELEASE_TAG" >&2
@@ -48,7 +45,6 @@ jobs:
           fi
 
       - name: Checkout release tag
-        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: git checkout --detach "refs/tags/${RELEASE_TAG}"
 
       - name: GoReleaser
