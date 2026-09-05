@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -278,13 +279,35 @@ func clearFrom(opener func() (keyring.Keyring, error), id Identity) (opened bool
 	}
 	for _, key := range []string{storageKey(id), cacheKey(id)} {
 		if err := ring.Remove(key); err != nil {
-			if err == keyring.ErrKeyNotFound || os.IsNotExist(err) || isIgnorableLegacyKeyError(err) {
+			if isAbsentOrUnnameable(err) {
 				continue
 			}
 			return true, err
 		}
 	}
 	return true, nil
+}
+
+// isAbsentOrUnnameable reports whether a removal error means there is nothing
+// here to revoke: the item is already gone, or the key cannot name a file on
+// this platform at all (the legacy colon/pipe keys on Windows).
+//
+// Permission denied is deliberately excluded. os.Remove reports it as an
+// *os.PathError and isIgnorableLegacyKeyError ignores every *os.PathError, so
+// folding the two together would let a still-readable token survive a logout
+// that reported success. A token we are not allowed to delete is a token that
+// survives, and Clear has to say so.
+func isAbsentOrUnnameable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, keyring.ErrKeyNotFound) || errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	if errors.Is(err, fs.ErrPermission) {
+		return false
+	}
+	return isIgnorableLegacyKeyError(err)
 }
 
 func cacheKey(id Identity) string {

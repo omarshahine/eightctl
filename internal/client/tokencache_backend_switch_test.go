@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -186,3 +189,62 @@ type refusingRing struct {
 }
 
 func (r refusingRing) Remove(string) error { return r.err }
+
+// The file-backed stale-token case, end to end against the real file backend
+// rather than an in-memory store. A token that is still readable but whose
+// deletion is denied must not produce a successful logout, because the token
+// stays on disk and the very next command sends it as a bearer credential.
+func TestFileBackedTokenSurvivingDeniedDeletionIsReportedNotSilentlyReused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not block unlink the same way on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses the directory permissions this test relies on")
+	}
+
+	dir := filepath.Join(t.TempDir(), "keyring")
+	fileOpener := func() (keyring.Keyring, error) {
+		return keyring.Open(keyring.Config{
+			ServiceName:      "eightctl-test",
+			AllowedBackends:  []keyring.BackendType{keyring.FileBackend},
+			FileDir:          dir,
+			FilePasswordFunc: func(string) (string, error) { return "test-pass", nil },
+		})
+	}
+	defer tokencache.SetOpenKeyringForTest(func() (keyring.Keyring, error) {
+		return nil, errors.New("no OS keyring on this host")
+	})()
+	defer tokencache.SetOpenFileKeyringForTest(fileOpener)()
+	defer tokencache.SetFileBackendPinForTest(true)()
+
+	const stale = "file-token-deletion-denied"
+	api := &recordingAPI{newToken: "fresh-token"}
+	srv := api.start(t)
+	ctx := context.Background()
+
+	seed := newSwitchClient(srv)
+	if err := tokencache.Save(seed.Identity(), stale, time.Now().Add(time.Hour), "uid"); err != nil {
+		t.Fatalf("seeding real file backend: %v", err)
+	}
+
+	// Deny unlink while leaving the stored item readable.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	logoutErr := tokencache.Clear(seed.Identity())
+
+	// The token survived, so a fresh client still puts it on the wire. That is
+	// precisely why logout must not have reported success.
+	after := newSwitchClient(srv)
+	if err := after.do(ctx, http.MethodGet, "/probe", nil, nil, nil); err != nil {
+		t.Fatalf("post-logout request: %v", err)
+	}
+	if !api.sawBearer(stale) {
+		t.Fatal("test is vacuous: the surviving token was never sent")
+	}
+	if logoutErr == nil {
+		t.Fatal("logout reported success while a readable token survived and was reused")
+	}
+}

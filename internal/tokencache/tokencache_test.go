@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -434,5 +435,66 @@ func TestClearFailsWhenNoBackendOpens(t *testing.T) {
 	id := Identity{BaseURL: "https://example.test/v1", ClientID: "cid", Email: "user@example.test"}
 	if err := Clear(id); err == nil {
 		t.Fatal("Clear reported success with no reachable backend")
+	}
+}
+
+// realFileKeyring opens the production file backend rooted in a temp dir, and
+// returns the directory holding the stored items.
+func realFileKeyring(t *testing.T) (func() (keyring.Keyring, error), string) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "keyring")
+	opener := func() (keyring.Keyring, error) {
+		return keyring.Open(keyring.Config{
+			ServiceName:      serviceName + "-test",
+			AllowedBackends:  []keyring.BackendType{keyring.FileBackend},
+			FileDir:          dir,
+			FilePasswordFunc: filePassword,
+		})
+	}
+	return opener, dir
+}
+
+// The file-backed stale-token case: a token that is still readable but whose
+// deletion is denied must not produce a successful logout. os.Remove returns
+// *os.PathError for permission denied, and the inherited legacy-key filter
+// ignored every *os.PathError, so logout reported success while the token
+// stayed on disk and loadable.
+func TestClearReportsPermissionDeniedFileRemoval(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not block unlink the same way on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses the directory permissions this test relies on")
+	}
+
+	fileOpener, dir := realFileKeyring(t)
+	defer SetOpenKeyringForTest(func() (keyring.Keyring, error) {
+		return nil, errors.New("no OS keyring on this host")
+	})()
+	defer SetOpenFileKeyringForTest(fileOpener)()
+	defer SetFileBackendPinForTest(true)()
+
+	id := Identity{BaseURL: "https://example.test/v1", ClientID: "cid", Email: "user@example.test"}
+	if err := Save(id, "denied-token", time.Now().Add(time.Hour), "uid"); err != nil {
+		t.Fatalf("seeding file backend: %v", err)
+	}
+
+	// Deny unlink while leaving the item readable.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	err := Clear(id)
+
+	// Non-vacuous: the token really did survive the failed logout.
+	if cached, loadErr := Load(id); loadErr != nil {
+		t.Fatalf("test is vacuous, the token did not survive: %v", loadErr)
+	} else if cached.Token != "denied-token" {
+		t.Fatalf("unexpected surviving token %q", cached.Token)
+	}
+
+	if err == nil {
+		t.Fatal("logout reported success while a readable token survived a denied deletion")
 	}
 }
