@@ -86,6 +86,14 @@ func SetOpenFileKeyringForTest(fn func() (keyring.Keyring, error)) (restore func
 	return func() { openFileKeyring = prev }
 }
 
+// SetFileBackendPinForTest sets the file-backend pin and returns a restore
+// func, so packages outside tokencache can exercise both sides of the switch.
+func SetFileBackendPinForTest(pin bool) (restore func()) {
+	prev := pinFileBackend
+	pinFileBackend = pin
+	return func() { pinFileBackend = prev }
+}
+
 func defaultOpenKeyring() (keyring.Keyring, error) {
 	home, _ := os.UserHomeDir()
 	return keyring.Open(keyring.Config{
@@ -111,6 +119,15 @@ func defaultOpenFileKeyring() (keyring.Keyring, error) {
 	})
 }
 
+// filePassword returns the encryption password for the file backend.
+//
+// It is a fixed, publicly known constant, not a user-held secret. The file
+// backend's protection boundary is therefore filesystem permissions: anyone who
+// can read the keyring directory can decrypt what is in it. The OS keyring is
+// stronger -- on macOS a Keychain item's ACL is bound to the code identity that
+// created it -- and remains the default for that reason. See UseFileBackend for
+// why an operator might still choose the file backend, and the README section
+// "Token storage" for the tradeoff stated in user-facing terms.
 func filePassword(_ string) (string, error) {
 	return serviceName + "-fallback", nil
 }
@@ -223,29 +240,51 @@ func loadFrom(opener func() (keyring.Keyring, error), id Identity) (*CachedToken
 // Clear revokes the cached token from every backend it could be in, ignoring
 // pinFileBackend. Logout must not leave a usable session behind in the OS
 // keyring just because this run was configured to read from a file.
+//
+// A backend that opens and then refuses removal is reported as an error even
+// when the other backend succeeded. The two failure kinds are not equivalent: a
+// backend that will not open holds nothing this process can leak, while one
+// that refuses removal may still hold a token a later command would send as a
+// bearer credential. Returning nil there would report a session as revoked
+// while it is still usable, which is the one answer logout must never give.
 func Clear(id Identity) error {
-	primaryErr := clearFrom(openKeyring, id)
-	fallbackErr := clearFrom(openFileKeyring, id)
-	if primaryErr != nil && fallbackErr != nil {
+	primaryOpened, primaryErr := clearFrom(openKeyring, id)
+	fileOpened, fileErr := clearFrom(openFileKeyring, id)
+
+	// Opened, then refused: a usable session may survive. Say so.
+	if primaryOpened && primaryErr != nil {
 		return primaryErr
+	}
+	if fileOpened && fileErr != nil {
+		return fileErr
+	}
+	// Neither backend opened, so nothing was revoked anywhere.
+	if !primaryOpened && !fileOpened {
+		if primaryErr != nil {
+			return primaryErr
+		}
+		return fileErr
 	}
 	return nil
 }
 
-func clearFrom(opener func() (keyring.Keyring, error), id Identity) error {
+// clearFrom removes id's cached token from a single backend. It reports whether
+// the backend could be opened at all, so Clear can tell "nothing to revoke
+// here" apart from "revocation was refused".
+func clearFrom(opener func() (keyring.Keyring, error), id Identity) (opened bool, err error) {
 	ring, err := opener()
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, key := range []string{storageKey(id), cacheKey(id)} {
 		if err := ring.Remove(key); err != nil {
 			if err == keyring.ErrKeyNotFound || os.IsNotExist(err) || isIgnorableLegacyKeyError(err) {
 				continue
 			}
-			return err
+			return true, err
 		}
 	}
-	return nil
+	return true, nil
 }
 
 func cacheKey(id Identity) string {
