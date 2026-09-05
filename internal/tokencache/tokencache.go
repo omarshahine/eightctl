@@ -39,6 +39,21 @@ var (
 	openFileKeyring = defaultOpenFileKeyring
 )
 
+// UseFileBackend pins token storage to the file backend, so the OS keyring is
+// never opened.
+//
+// On macOS the keyring backend is the Keychain, and a Keychain item's ACL is
+// bound to the code identity that created it. Any rebuild or reinstall of this
+// binary therefore invalidates it, and every later command blocks on a consent
+// dialog. On a headless or unattended host nobody sees that dialog, so it is
+// indistinguishable from a hang: the process simply never returns, and any
+// scheduler calling eightctl stalls until its own timeout.
+//
+// The file backend has no such binding and survives reinstalls untouched.
+func UseFileBackend() {
+	openKeyring = openFileKeyring
+}
+
 // SetOpenKeyringForTest swaps the keyring opener; it returns a restore func.
 // Not safe for concurrent tests; intended for isolated test scenarios.
 func SetOpenKeyringForTest(fn func() (keyring.Keyring, error)) (restore func()) {
