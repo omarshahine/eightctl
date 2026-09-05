@@ -23,7 +23,8 @@ build:
 # Local development install. NOT the release path -- releases are built by
 # GoReleaser (.goreleaser.yaml) from a tag.
 #
-# The ad-hoc re-sign is required, not hygiene. macOS caches a binary's code
+# The ad-hoc re-sign is required on macOS, not hygiene (it is skipped
+# elsewhere). macOS caches a binary's code
 # signature against its path, so overwriting the file in place leaves the
 # cached CDHash describing content that no longer exists and AMFI SIGKILLs
 # every invocation afterwards. It presents as the binary producing no output
@@ -40,5 +41,10 @@ build:
 # nobody is watching for a dialog.
 install: build
 	install -m 0755 ./eightctl "$(PREFIX)/eightctl"
-	codesign --force --sign - "$(PREFIX)/eightctl"
-	@codesign --verify "$(PREFIX)/eightctl" && echo "installed and signed: $(PREFIX)/eightctl"
+	@if [ "$$(uname -s)" = "Darwin" ]; then \
+		codesign --force --sign - "$(PREFIX)/eightctl" && \
+		codesign --verify "$(PREFIX)/eightctl" && \
+		echo "installed and signed: $(PREFIX)/eightctl"; \
+	else \
+		echo "installed: $(PREFIX)/eightctl"; \
+	fi
