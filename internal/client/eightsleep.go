@@ -383,6 +383,30 @@ func (c *Client) SetAwayMode(ctx context.Context, userID string, away bool) erro
 	return c.doURL(ctx, http.MethodPut, u, payload, nil)
 }
 
+// GetAwayMode reports whether away mode is currently active for a user.
+// It reads the same app API endpoint SetAwayMode writes to, which answers
+// with {"isAway": bool}. If userID is empty, it defaults to the
+// authenticated user.
+func (c *Client) GetAwayMode(ctx context.Context, userID string) (bool, error) {
+	if userID == "" {
+		if err := c.requireUser(ctx); err != nil {
+			return false, err
+		}
+		userID = c.UserID
+	}
+	var res struct {
+		IsAway *bool `json:"isAway"`
+	}
+	u := fmt.Sprintf("%s/users/%s/away-mode", appAPIBaseURL, userID)
+	if err := c.doURL(ctx, http.MethodGet, u, nil, &res); err != nil {
+		return false, err
+	}
+	if res.IsAway == nil {
+		return false, fmt.Errorf("away mode response is missing isAway")
+	}
+	return *res.IsAway, nil
+}
+
 // TempStatus represents current temperature state payload.
 type TempStatus struct {
 	CurrentLevel int `json:"currentLevel"`

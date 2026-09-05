@@ -96,14 +96,21 @@ func (c *Client) HouseholdUserTargets(ctx context.Context) ([]HouseholdUserTarge
 }
 
 // sideAssignmentsFromDevice builds a userID -> side map from the /devices payload.
-// In Away mode the top-level leftUserId/rightUserId come back empty and the
-// real IDs are stashed inside awaySides as {"leftUserId":"…","rightUserId":"…"}.
+// Away mode can collapse both top-level IDs onto the present user or omit them.
+// Distinct awaySides IDs retain the true left/right mapping.
 func sideAssignmentsFromDevice(leftUserID, rightUserID string, awaySides map[string]string) map[string]string {
-	if leftUserID == "" {
-		leftUserID = awaySides["leftUserId"]
-	}
-	if rightUserID == "" {
-		rightUserID = awaySides["rightUserId"]
+	awayLeft := awaySides["leftUserId"]
+	awayRight := awaySides["rightUserId"]
+
+	if awayLeft != "" && awayRight != "" && awayLeft != awayRight {
+		leftUserID, rightUserID = awayLeft, awayRight
+	} else {
+		if leftUserID == "" {
+			leftUserID = awayLeft
+		}
+		if rightUserID == "" {
+			rightUserID = awayRight
+		}
 	}
 	out := map[string]string{}
 	switch {
