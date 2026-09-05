@@ -238,9 +238,12 @@ func loadFrom(opener func() (keyring.Keyring, error), id Identity) (*CachedToken
 	return &cached, nil
 }
 
-// Clear revokes the cached token from every backend it could be in, ignoring
+// Clear removes the cached token from every backend it can reach, ignoring
 // pinFileBackend. Logout must not leave a usable session behind in the OS
 // keyring just because this run was configured to read from a file.
+//
+// This is local cache removal, not revocation: a token already issued stays
+// valid at the service until it expires.
 //
 // A backend that opens and then refuses removal is reported as an error even
 // when the other backend succeeded. The two failure kinds are not equivalent: a

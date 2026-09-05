@@ -112,7 +112,9 @@ keyring_backend: file   # or EIGHTCTL_KEYRING_BACKEND=file
 
 **Understand what you give up.** The file backend is encrypted with a fixed constant compiled into the binary, not a secret you hold. Its real protection is filesystem permissions: anyone who can read `~/.config/eightctl/keyring` can decrypt the token in it. The OS keyring is the stronger option and stays the default for that reason. Choose the file backend when an unattended process must not block on a dialog, and protect the directory accordingly (`chmod 700 ~/.config/eightctl`).
 
-The pin changes only where tokens are *stored*. It never narrows what revoking them covers: `eightctl logout` always clears both the OS keyring and the file backend, whatever this setting says, so pinning cannot leave a usable session behind in the store you stopped reading from. If a backend is present and refuses deletion, logout reports that as an error rather than success, because the token survives and later commands would still send it.
+The pin changes only where tokens are *stored*. It never narrows what clearing them covers: `eightctl logout` clears the cached token from both the OS keyring and the file backend whatever this setting says, so pinning cannot leave a usable session behind in the store you stopped reading from.
+
+Be precise about what that guarantee is, though. `logout` removes the local cache. It does not revoke anything with Eight Sleep, so a token already issued stays valid at the service until it expires. And it covers the stores it can actually reach: a backend that will not open on this host holds nothing `eightctl` can clear, and logout tolerates that rather than failing. A backend that *is* reachable and refuses deletion is reported as an error instead of success, because the token survives there and later commands would still send it.
 
 The API is undocumented and cloud-only. The [project specification](docs/spec.md#reality-of-the-api) records the current contract, while [CHANGELOG.md](CHANGELOG.md) tracks endpoint removals and compatibility changes.
 
