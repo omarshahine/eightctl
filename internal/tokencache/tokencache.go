@@ -37,10 +37,12 @@ type Identity struct {
 var (
 	openKeyring     = defaultOpenKeyring
 	openFileKeyring = defaultOpenFileKeyring
+	// pinFileBackend routes Save/Load to the file backend only. See UseFileBackend.
+	pinFileBackend bool
 )
 
-// UseFileBackend pins token storage to the file backend, so the OS keyring is
-// never opened.
+// UseFileBackend pins reads and writes to the file backend, so the OS keyring
+// is never opened for Save or Load.
 //
 // On macOS the keyring backend is the Keychain, and a Keychain item's ACL is
 // bound to the code identity that created it. Any rebuild or reinstall of this
@@ -50,8 +52,22 @@ var (
 // scheduler calling eightctl stalls until its own timeout.
 //
 // The file backend has no such binding and survives reinstalls untouched.
+//
+// This deliberately sets a flag rather than reassigning openKeyring. Clear()
+// must keep reaching the real OS keyring whatever the pin says: an earlier
+// revision aliased the two openers, so logout removed the file entry twice and
+// silently left a usable session in the Keychain, which reappeared the moment
+// the pin was removed. Pinning storage must not narrow what logout revokes.
 func UseFileBackend() {
-	openKeyring = openFileKeyring
+	pinFileBackend = true
+}
+
+// primaryOpener is the backend Save and Load use. Clear does not consult it.
+func primaryOpener() func() (keyring.Keyring, error) {
+	if pinFileBackend {
+		return openFileKeyring
+	}
+	return openKeyring
 }
 
 // SetOpenKeyringForTest swaps the keyring opener; it returns a restore func.
@@ -114,10 +130,14 @@ func Save(id Identity, token string, expiresAt time.Time, userID string) error {
 		Data:  data,
 	}
 
-	primaryErr := trySetWith(openKeyring, item)
+	primaryErr := trySetWith(primaryOpener(), item)
 	if primaryErr == nil {
 		log.Debug("keyring saved token")
 		return nil
+	}
+	if pinFileBackend {
+		// The file backend is the pinned target; there is nothing to fall back to.
+		return primaryErr
 	}
 	log.Debug("primary keyring set failed; falling back to file backend", "error", primaryErr)
 
@@ -143,7 +163,7 @@ func trySetWith(opener func() (keyring.Keyring, error), item keyring.Item) error
 // multiple household userIDs. The cached UserID is informational metadata for
 // callers that want to recover "which userID was primary at auth time."
 func Load(id Identity) (*CachedToken, error) {
-	cached, err := loadFrom(openKeyring, id)
+	cached, err := loadFrom(primaryOpener(), id)
 	if err == nil {
 		return cached, nil
 	}
@@ -200,6 +220,9 @@ func loadFrom(opener func() (keyring.Keyring, error), id Identity) (*CachedToken
 	return &cached, nil
 }
 
+// Clear revokes the cached token from every backend it could be in, ignoring
+// pinFileBackend. Logout must not leave a usable session behind in the OS
+// keyring just because this run was configured to read from a file.
 func Clear(id Identity) error {
 	primaryErr := clearFrom(openKeyring, id)
 	fallbackErr := clearFrom(openFileKeyring, id)

@@ -314,3 +314,42 @@ func TestIgnorableLegacyKeyError(t *testing.T) {
 		t.Fatalf("generic error should not be ignorable")
 	}
 }
+
+// A pinned file backend must not narrow what logout revokes. An earlier
+// revision implemented the pin by aliasing openKeyring to openFileKeyring, so
+// Clear() removed the file entry twice and left the primary entry intact --
+// logout reported success while a usable session survived in the OS keyring,
+// and it came back as soon as the pin was removed.
+func TestClearRevokesPrimaryWhenFileBackendPinned(t *testing.T) {
+	primary := keyring.NewArrayKeyring(nil)
+	file := keyring.NewArrayKeyring(nil)
+
+	restorePrimary := SetOpenKeyringForTest(func() (keyring.Keyring, error) { return primary, nil })
+	defer restorePrimary()
+	restoreFile := SetOpenFileKeyringForTest(func() (keyring.Keyring, error) { return file, nil })
+	defer restoreFile()
+
+	prevPin := pinFileBackend
+	defer func() { pinFileBackend = prevPin }()
+	pinFileBackend = false
+
+	id := Identity{BaseURL: "https://example.test/v1", ClientID: "cid", Email: "user@example.test"}
+	if err := Save(id, "primary-token", time.Now().Add(time.Hour), "uid"); err != nil {
+		t.Fatalf("seeding primary backend: %v", err)
+	}
+	if _, err := Load(id); err != nil {
+		t.Fatalf("primary token should load before logout: %v", err)
+	}
+
+	// Pin to file, as `keyring_backend: file` does, then log out.
+	pinFileBackend = true
+	if err := Clear(id); err != nil {
+		t.Fatalf("Clear returned an error: %v", err)
+	}
+
+	// Unpin: the primary entry must be gone, not merely unreachable.
+	pinFileBackend = false
+	if cached, err := Load(id); err == nil {
+		t.Fatalf("logout left a usable session in the primary backend: %+v", cached)
+	}
+}
