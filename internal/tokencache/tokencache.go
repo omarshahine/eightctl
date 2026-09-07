@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"charm.land/log/v2"
@@ -186,46 +188,34 @@ func loadFrom(opener func() (keyring.Keyring, error), id Identity) (*CachedToken
 	return &cached, nil
 }
 
-// Clear revokes the cached token from every backend it could be in.
-//
-// The two failure modes are not equivalent and must not be folded together. A
-// backend that will not open holds nothing this process can leak, so tolerating
-// it is correct. A backend that opens and then refuses removal may still hold a
-// token a later command would send as a bearer credential. Returning nil there
-// would report a session as revoked while it is still usable, which is the one
-// answer logout must never give.
+// Clear removes the identity's local token cache from reachable backends.
+// An unavailable backend is tolerated if another opens, but removal failures
+// from an opened backend are returned. This does not revoke tokens at the service.
 func Clear(id Identity) error {
 	primaryOpened, primaryErr := clearFrom(openKeyring, id)
 	fileOpened, fileErr := clearFrom(openFileKeyring, id)
 
-	// Opened, then refused: a usable session may survive. Say so.
 	if primaryOpened && primaryErr != nil {
 		return primaryErr
 	}
 	if fileOpened && fileErr != nil {
 		return fileErr
 	}
-	// Neither backend opened, so nothing was revoked anywhere.
 	if !primaryOpened && !fileOpened {
-		if primaryErr != nil {
-			return primaryErr
-		}
-		return fileErr
+		return primaryErr
 	}
 	return nil
 }
 
-// clearFrom removes id's cached token from a single backend. It reports whether
-// the backend could be opened at all, so Clear can tell "nothing to revoke
-// here" apart from "revocation was refused".
+// clearFrom distinguishes an unavailable backend from an incomplete removal.
 func clearFrom(opener func() (keyring.Keyring, error), id Identity) (opened bool, err error) {
 	ring, err := opener()
 	if err != nil {
 		return false, err
 	}
-	for _, key := range []string{storageKey(id), cacheKey(id)} {
+	for i, key := range []string{storageKey(id), cacheKey(id)} {
 		if err := ring.Remove(key); err != nil {
-			if isAbsentOrUnnameable(err) {
+			if isAbsentOrUnnameable(err, i == 1) {
 				continue
 			}
 			return true, err
@@ -234,26 +224,14 @@ func clearFrom(opener func() (keyring.Keyring, error), id Identity) (opened bool
 	return true, nil
 }
 
-// isAbsentOrUnnameable reports whether a removal error means there is nothing
-// here to revoke: the item is already gone, or the key cannot name a file on
-// this platform at all (the legacy colon/pipe keys on Windows).
-//
-// Permission denied is deliberately excluded. os.Remove reports it as an
-// *os.PathError and isIgnorableLegacyKeyError ignores every *os.PathError, so
-// folding the two together would let a still-readable token survive a logout
-// that reported success. A token we are not allowed to delete is a token that
-// survives, and Clear has to say so.
-func isAbsentOrUnnameable(err error) bool {
-	if err == nil {
-		return false
-	}
+func isAbsentOrUnnameable(err error, legacy bool) bool {
 	if errors.Is(err, keyring.ErrKeyNotFound) || errors.Is(err, fs.ErrNotExist) {
 		return true
 	}
-	if errors.Is(err, fs.ErrPermission) {
-		return false
-	}
-	return isIgnorableLegacyKeyError(err)
+	// Only legacy keys can contain Windows-invalid filename characters. Other
+	// PathErrors (permissions, read-only mounts, I/O failures) may leave a token.
+	const windowsInvalidName syscall.Errno = 123
+	return legacy && runtime.GOOS == "windows" && errors.Is(err, windowsInvalidName)
 }
 
 func cacheKey(id Identity) string {
