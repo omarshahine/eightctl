@@ -40,7 +40,48 @@ type Identity struct {
 var (
 	openKeyring     = defaultOpenKeyring
 	openFileKeyring = defaultOpenFileKeyring
+	// pinFileBackend routes Save/Load to the file backend only. See UseFileBackend.
+	pinFileBackend bool
 )
+
+// UseFileBackend pins reads and writes to the file backend, so the OS keyring is
+// never opened for Save or Load.
+//
+// This matters only where an OS keyring backend is actually compiled in. The
+// pinned github.com/99designs/keyring registers its macOS Keychain backend under
+// a "darwin && cgo" build constraint, and released eightctl binaries are built
+// with CGO_ENABLED=0, so those already select the file backend on macOS with no
+// configuration at all. The case this option addresses is a cgo-enabled source
+// build (go install, or make install on a Mac with a C toolchain), where the
+// Keychain backend is present.
+//
+// There, a Keychain item's ACL is bound to the code identity that created it, so
+// rebuilding or reinstalling invalidates it and the next command blocks on a
+// consent dialog. On a headless or unattended host nobody sees that dialog, so it
+// is indistinguishable from a hang. The file backend has no such binding.
+//
+// This deliberately sets a flag rather than reassigning openKeyring. Clear() must
+// keep reaching the real OS keyring whatever the pin says: pinning where tokens
+// are stored must not narrow what logout revokes.
+func UseFileBackend() {
+	pinFileBackend = true
+}
+
+// primaryOpener is the backend Save and Load use. Clear does not consult it.
+func primaryOpener() func() (keyring.Keyring, error) {
+	if pinFileBackend {
+		return openFileKeyring
+	}
+	return openKeyring
+}
+
+// SetFileBackendPinForTest sets the file-backend pin and returns a restore func,
+// so packages outside tokencache can exercise both sides of the switch.
+func SetFileBackendPinForTest(pin bool) (restore func()) {
+	prev := pinFileBackend
+	pinFileBackend = pin
+	return func() { pinFileBackend = prev }
+}
 
 // SetOpenKeyringForTest swaps the keyring opener; it returns a restore func.
 // Not safe for concurrent tests; intended for isolated test scenarios.
@@ -83,6 +124,12 @@ func defaultOpenFileKeyring() (keyring.Keyring, error) {
 	})
 }
 
+// filePassword returns the encryption password for the file backend.
+//
+// It is a fixed, publicly known constant, not a user-held secret, so the file
+// backend's protection boundary is filesystem permissions: anyone who can read
+// the keyring directory can decrypt what is in it. See UseFileBackend and the
+// README section "Token storage".
 func filePassword(_ string) (string, error) {
 	return serviceName + "-fallback", nil
 }
@@ -102,10 +149,14 @@ func Save(id Identity, token string, expiresAt time.Time, userID string) error {
 		Data:  data,
 	}
 
-	primaryErr := trySetWith(openKeyring, item)
+	primaryErr := trySetWith(primaryOpener(), item)
 	if primaryErr == nil {
 		log.Debug("keyring saved token")
 		return nil
+	}
+	if pinFileBackend {
+		// The file backend is the pinned target; there is nothing to fall back to.
+		return primaryErr
 	}
 	log.Debug("primary keyring set failed; falling back to file backend", "error", primaryErr)
 
@@ -131,7 +182,7 @@ func trySetWith(opener func() (keyring.Keyring, error), item keyring.Item) error
 // multiple household userIDs. The cached UserID is informational metadata for
 // callers that want to recover "which userID was primary at auth time."
 func Load(id Identity) (*CachedToken, error) {
-	cached, err := loadFrom(openKeyring, id)
+	cached, err := loadFrom(primaryOpener(), id)
 	if err == nil {
 		return cached, nil
 	}

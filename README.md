@@ -98,6 +98,24 @@ eightctl status --fields side,name,mode,level
 
 `eightctl` authenticates against Eight Sleep's OAuth service and caches tokens in the operating system keyring, with a file-backed fallback. Reusing cached tokens reduces login traffic, but the provider can still return rate-limit errors.
 
+### Token storage
+
+Where the cached token lands depends on which keyring backends were compiled in.
+
+**Released binaries already use the file backend on macOS.** The pinned keyring library registers its Keychain backend only under a `darwin && cgo` build constraint, and releases are built with `CGO_ENABLED=0`, so the Keychain backend is not present and the file backend is selected with no configuration. Nothing below changes that.
+
+A **cgo-enabled source build** (`go install`, or `make install` on a Mac with a C toolchain) does get the Keychain backend, and with it a problem on unattended hosts. A Keychain item's ACL is bound to the code identity that created it, so rebuilding or reinstalling invalidates it and the next command raises a consent dialog. Where nobody can answer that dialog the process simply blocks, which to a scheduler is indistinguishable from a hang.
+
+For that case, `keyring_backend: file` pins storage to the file backend, which has no such binding:
+
+```yaml
+keyring_backend: file   # or EIGHTCTL_KEYRING_BACKEND=file
+```
+
+**Understand the tradeoff.** The file backend is encrypted with a fixed constant compiled into the binary, not a secret you hold. Its real protection is filesystem permissions: anyone who can read `~/.config/eightctl/keyring` can decrypt the token in it. Where an OS keyring backend is available it is the stronger option and remains the default, so set this only when an unattended process must not block on a dialog, and protect the directory accordingly (`chmod 700 ~/.config/eightctl`).
+
+The pin changes only where tokens are *stored*. It never narrows what clearing them covers: logout always reaches both backends whatever this setting says, so pinning cannot leave a usable session behind in the store you stopped reading from.
+
 `eightctl logout` removes the selected account's local cached token from reachable stores. It returns an error if a reachable store refuses deletion, even when another store clears successfully. An unavailable store remains tolerated if another opens. Logout does not revoke tokens at Eight Sleep; an already-issued token remains valid at the service until it expires.
 
 The API is undocumented and cloud-only. The [project specification](docs/spec.md#reality-of-the-api) records the current contract, while [CHANGELOG.md](CHANGELOG.md) tracks endpoint removals and compatibility changes.

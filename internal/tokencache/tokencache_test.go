@@ -495,3 +495,69 @@ func realFileKeyring(t *testing.T) (func() (keyring.Keyring, error), string) {
 	}
 	return opener, dir
 }
+
+// Pinning storage to the file backend must not narrow what logout revokes. An
+// earlier revision implemented the pin by aliasing openKeyring to
+// openFileKeyring, so Clear() removed the file entry twice and left the primary
+// entry intact: logout reported success while a usable session survived in the
+// OS keyring, and it came back the moment the pin was removed.
+func TestClearRevokesPrimaryWhenFileBackendPinned(t *testing.T) {
+	primary := keyring.NewArrayKeyring(nil)
+	file := keyring.NewArrayKeyring(nil)
+
+	defer SetOpenKeyringForTest(func() (keyring.Keyring, error) { return primary, nil })()
+	defer SetOpenFileKeyringForTest(func() (keyring.Keyring, error) { return file, nil })()
+	defer SetFileBackendPinForTest(false)()
+
+	id := Identity{BaseURL: "https://example.test/v1", ClientID: "cid", Email: "user@example.test"}
+	if err := Save(id, "primary-token", time.Now().Add(time.Hour), "uid"); err != nil {
+		t.Fatalf("seeding primary backend: %v", err)
+	}
+	if _, err := Load(id); err != nil {
+		t.Fatalf("primary token should load before logout: %v", err)
+	}
+
+	// Pin to file, as `keyring_backend: file` does, then log out.
+	restore := SetFileBackendPinForTest(true)
+	if err := Clear(id); err != nil {
+		t.Fatalf("Clear returned an error: %v", err)
+	}
+	restore()
+
+	// Unpinned: the primary entry must be gone, not merely unreachable.
+	if cached, err := Load(id); err == nil {
+		t.Fatalf("logout left a usable session in the primary backend: %+v", cached)
+	}
+}
+
+// The pin routes Save and Load to the file backend without touching the OS keyring.
+func TestPinRoutesSaveAndLoadToFileBackend(t *testing.T) {
+	primary := keyring.NewArrayKeyring(nil)
+	file := keyring.NewArrayKeyring(nil)
+	primaryOpens := 0
+
+	defer SetOpenKeyringForTest(func() (keyring.Keyring, error) {
+		primaryOpens++
+		return primary, nil
+	})()
+	defer SetOpenFileKeyringForTest(func() (keyring.Keyring, error) { return file, nil })()
+	defer SetFileBackendPinForTest(true)()
+
+	id := Identity{BaseURL: "https://example.test/v1", ClientID: "cid", Email: "user@example.test"}
+	if err := Save(id, "file-token", time.Now().Add(time.Hour), "uid"); err != nil {
+		t.Fatalf("Save while pinned: %v", err)
+	}
+	cached, err := Load(id)
+	if err != nil {
+		t.Fatalf("Load while pinned: %v", err)
+	}
+	if cached.Token != "file-token" {
+		t.Fatalf("unexpected token %q", cached.Token)
+	}
+	if primaryOpens != 0 {
+		t.Fatalf("pinned Save/Load opened the OS keyring %d times, expected 0", primaryOpens)
+	}
+	if keys, _ := file.Keys(); len(keys) == 0 {
+		t.Fatal("pinned Save did not write to the file backend")
+	}
+}
